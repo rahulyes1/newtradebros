@@ -2,7 +2,7 @@ import { useMemo, useState, type FormEvent } from 'react';
 import { X } from 'lucide-react';
 import type { AddExitLegInput, Trade } from '../../../shared/types/trade';
 import type { CurrencyCode } from '../../../shared/config/tradingOptions';
-import { getRemainingQuantity } from '../../../shared/services/tradeMath';
+import { calculateLegPnl, getRemainingQuantity } from '../../../shared/services/tradeMath';
 
 interface CloseTradeModalProps {
   trade: Trade | null;
@@ -32,6 +32,7 @@ export default function CloseTradeModal({
   onConfirmExit,
   onUpdateMarkPrice,
 }: CloseTradeModalProps) {
+  const [exitMode, setExitMode] = useState<'partial' | 'full'>('partial');
   const [exitDate, setExitDate] = useState(() => todayIso());
   const [exitPrice, setExitPrice] = useState('');
   const [exitQty, setExitQty] = useState(() => (trade ? formatNumber(getRemainingQuantity(trade)) : ''));
@@ -40,10 +41,24 @@ export default function CloseTradeModal({
   const [markPrice, setMarkPrice] = useState(() => (trade ? formatNumber(trade.markPrice) : ''));
 
   const remainingQty = useMemo(() => (trade ? getRemainingQuantity(trade) : 0), [trade]);
+  const parsedExitPrice = Number.parseFloat(exitPrice);
+  const parsedExitQty = Number.parseFloat(exitQty);
+  const previewPnl = useMemo(() => {
+    if (!trade || !Number.isFinite(parsedExitPrice) || parsedExitPrice <= 0 || !Number.isFinite(parsedExitQty) || parsedExitQty <= 0) {
+      return undefined;
+    }
+    return calculateLegPnl(trade.direction, trade.entryPrice, parsedExitPrice, parsedExitQty, fees.trim() ? Number.parseFloat(fees) : 0);
+  }, [fees, parsedExitPrice, parsedExitQty, trade]);
 
   if (!trade) {
     return null;
   }
+
+  const setQtyFromRatio = (ratio: number) => {
+    const nextQty = Math.max(0, remainingQty * ratio);
+    setExitQty(nextQty.toFixed(2));
+    setExitMode(ratio >= 0.9999 ? 'full' : 'partial');
+  };
 
   const saveMarkPrice = () => {
     if (!markPrice.trim()) {
@@ -148,7 +163,69 @@ export default function CloseTradeModal({
           </div>
 
           <form onSubmit={confirmExit} className="space-y-3 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-4">
-            <h3 className="text-sm font-semibold text-[var(--text)]">Add Exit Leg (Confirm Execute)</h3>
+            <h3 className="text-sm font-semibold text-[var(--text)]">Exit Builder</h3>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setExitMode('partial');
+                  if (Number.parseFloat(exitQty) > remainingQty) {
+                    setExitQty(remainingQty.toFixed(2));
+                  }
+                }}
+                className={`rounded-lg border px-3 py-2 text-sm ${
+                  exitMode === 'partial'
+                    ? 'border-[var(--accent)] bg-[color:rgba(250,204,21,0.15)] text-[var(--text)]'
+                    : 'border-[var(--border)] text-[var(--muted)]'
+                }`}
+              >
+                Partial Sell
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setExitMode('full');
+                  setExitQty(remainingQty.toFixed(2));
+                }}
+                className={`rounded-lg border px-3 py-2 text-sm ${
+                  exitMode === 'full'
+                    ? 'border-[var(--positive)] bg-[color:rgba(52,211,153,0.15)] text-[var(--text)]'
+                    : 'border-[var(--border)] text-[var(--muted)]'
+                }`}
+              >
+                Close Full Position
+              </button>
+            </div>
+            <div className="grid grid-cols-4 gap-2">
+              <button
+                type="button"
+                onClick={() => setQtyFromRatio(0.25)}
+                className="rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2 py-1 text-xs text-[var(--muted)]"
+              >
+                25%
+              </button>
+              <button
+                type="button"
+                onClick={() => setQtyFromRatio(0.5)}
+                className="rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2 py-1 text-xs text-[var(--muted)]"
+              >
+                50%
+              </button>
+              <button
+                type="button"
+                onClick={() => setQtyFromRatio(0.75)}
+                className="rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2 py-1 text-xs text-[var(--muted)]"
+              >
+                75%
+              </button>
+              <button
+                type="button"
+                onClick={() => setQtyFromRatio(1)}
+                className="rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2 py-1 text-xs text-[var(--muted)]"
+              >
+                100%
+              </button>
+            </div>
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
               <label className="space-y-1 text-sm">
                 <span className="text-[var(--muted)]">Exit Date</span>
@@ -197,6 +274,20 @@ export default function CloseTradeModal({
                 />
               </label>
             </div>
+            <div className="rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm">
+              <p className="text-[var(--muted)]">
+                Remaining after exit:{' '}
+                <span className="font-semibold text-[var(--text)]">
+                  {Number.isFinite(parsedExitQty) ? Math.max(0, remainingQty - parsedExitQty).toFixed(2) : remainingQty.toFixed(2)}
+                </span>
+              </p>
+              <p className="text-[var(--muted)]">
+                Estimated leg P&L:{' '}
+                <span className={previewPnl != null && previewPnl >= 0 ? 'text-[var(--positive)]' : 'text-[var(--negative)]'}>
+                  {previewPnl != null ? formatCurrency(previewPnl) : '-'}
+                </span>
+              </p>
+            </div>
             <label className="block space-y-1 text-sm">
               <span className="text-[var(--muted)]">Note (optional)</span>
               <input
@@ -210,7 +301,7 @@ export default function CloseTradeModal({
               type="submit"
               className="w-full rounded-lg bg-[var(--positive)] px-4 py-2 text-sm font-semibold text-black transition hover:brightness-110"
             >
-              Confirm Exit Leg
+              {exitMode === 'full' ? 'Confirm Full Close' : 'Confirm Partial Exit'}
             </button>
           </form>
 

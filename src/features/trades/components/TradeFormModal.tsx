@@ -18,6 +18,7 @@ interface TradeFormModalProps {
   isOpen: boolean;
   trade?: Trade | null;
   currency: CurrencyCode;
+  portfolioValue: number;
   onClose: () => void;
   onSubmit: (payload: TradeFormPayload) => void;
 }
@@ -106,7 +107,14 @@ function emptyState(trade?: Trade | null): TradeFormState {
   };
 }
 
-export default function TradeFormModal({ isOpen, trade, currency, onClose, onSubmit }: TradeFormModalProps) {
+export default function TradeFormModal({
+  isOpen,
+  trade,
+  currency,
+  portfolioValue,
+  onClose,
+  onSubmit,
+}: TradeFormModalProps) {
   const [state, setState] = useState<TradeFormState>(() => emptyState(trade));
   const isEdit = Boolean(trade);
 
@@ -126,6 +134,17 @@ export default function TradeFormModal({ isOpen, trade, currency, onClose, onSub
       initialExitFees,
     };
   }, [state.entryPrice, state.quantity, state.markPrice, state.initialExitPrice, state.initialExitQuantity, state.initialExitFees]);
+
+  const positionInfo = useMemo(() => {
+    const hasEntry = Number.isFinite(parsed.entryPrice) && parsed.entryPrice > 0;
+    const hasQty = Number.isFinite(parsed.quantity) && parsed.quantity > 0;
+    if (!hasEntry || !hasQty) {
+      return { value: 0, percent: 0, isReady: false };
+    }
+    const value = parsed.entryPrice * parsed.quantity;
+    const percent = portfolioValue > 0 ? (value / portfolioValue) * 100 : 0;
+    return { value, percent, isReady: true };
+  }, [parsed.entryPrice, parsed.quantity, portfolioValue]);
 
   if (!isOpen) {
     return null;
@@ -360,6 +379,17 @@ export default function TradeFormModal({ isOpen, trade, currency, onClose, onSub
                 />
               </label>
             )}
+            <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-3 text-sm md:col-span-2">
+              <p className="text-[var(--muted)]">Position Size Preview</p>
+              <p className="font-semibold text-[var(--text)]">
+                {positionInfo.isReady ? `${positionInfo.value.toFixed(2)} ${currency}` : `Enter entry and qty to preview`}
+              </p>
+              <p className="text-xs text-[var(--muted)]">
+                {positionInfo.isReady
+                  ? `${positionInfo.percent.toFixed(2)}% of portfolio (${portfolioValue.toFixed(2)} ${currency})`
+                  : 'Portfolio share will be shown automatically.'}
+              </p>
+            </div>
           </div>
 
           {!isEdit && (
