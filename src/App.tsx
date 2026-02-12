@@ -1,804 +1,613 @@
-import React, { useState, useEffect } from 'react';
-import { LineChart, Line, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
-import { TrendingUp, TrendingDown, DollarSign, Plus, X, Edit2, Trash2, Download } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { Bar, BarChart, CartesianGrid, Cell, Line, LineChart, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { AlarmClockCheck, Download, Edit2, Plus, RefreshCw, Target, Trash2 } from 'lucide-react';
+import type { GoalType } from './shared/types/goal';
+import type { AddExitLegInput, Trade } from './shared/types/trade';
+import { LocalTradeRepository } from './features/trades/repository/tradeRepository';
+import { LocalGoalRepository } from './features/goals/repository/goalRepository';
+import { buildAnalyticsSummary } from './features/analytics/analyticsService';
+import { getGoalProgress } from './features/goals/services/goalService';
+import { completeReminder, listActiveReminders } from './features/reminders/reminderService';
+import { getRemainingQuantity, roundTo2 } from './shared/services/tradeMath';
+import { exportTradesToCsv } from './features/trades/services/exportService';
+import { ApiPricingService } from './shared/services/pricing';
+import {
+  buildCurrencyFormatter,
+  CURRENCY_STORAGE_KEY,
+  DEFAULT_CURRENCY,
+  isCurrencyCode,
+  MAJOR_CURRENCIES,
+  type CurrencyCode,
+} from './shared/config/tradingOptions';
+import TradeFormModal, { type TradeFormPayload } from './features/trades/components/TradeFormModal';
+import CloseTradeModal from './features/trades/components/CloseTradeModal';
+import GoalsPanel from './features/goals/components/GoalsPanel';
 
-// Types
-interface Trade {
-  id: string;
-  date: string;
-  symbol: string;
-  direction: 'long' | 'short';
-  entryPrice: number;
-  exitPrice: number;
-  quantity: number;
-  pnl: number;
-  pnlPercent: number;
-  isWin: boolean;
-  setup?: string;
-  emotion?: string;
-  notes?: string;
-}
+type Tab = 'overview' | 'trades' | 'analytics' | 'goals';
+type FilterType = 'all' | 'wins' | 'losses';
+type StatusFilter = 'all' | 'open' | 'closed';
 
-interface TradeFormData {
-  date: string;
-  symbol: string;
-  direction: 'long' | 'short';
-  entryPrice: string;
-  exitPrice: string;
-  quantity: string;
-  setup: string;
-  emotion: string;
-  notes: string;
-}
+const C = {
+  grid: '#283243',
+  text: '#9ca3af',
+  realized: '#38bdf8',
+  provisional: '#22c55e',
+  pos: '#34d399',
+  neg: '#f87171',
+};
 
-function App() {
-  const [trades, setTrades] = useState<Trade[]>([]);
-  const [showAddTrade, setShowAddTrade] = useState(false);
-  const [editingTrade, setEditingTrade] = useState<Trade | null>(null);
-  const [activeTab, setActiveTab] = useState('overview');
-  
-  // Filter states
-  const [searchTerm, setSearchTerm] = useState('');
-  const [dateFrom, setDateFrom] = useState('');
-  const [dateTo, setDateTo] = useState('');
-  const [filterType, setFilterType] = useState<'all' | 'wins' | 'losses'>('all');
-  
-  const [formData, setFormData] = useState<TradeFormData>({
-    date: new Date().toISOString().split('T')[0],
-    symbol: '',
-    direction: 'long',
-    entryPrice: '',
-    exitPrice: '',
-    quantity: '',
-    notes: '',
-    setup: '',
-    emotion: 'neutral'
-  });
+const periodNow = () => new Date().toISOString().slice(0, 7);
+const pnlClass = (v: number) => (v >= 0 ? 'text-[var(--positive)]' : 'text-[var(--negative)]');
 
-  // Load trades from localStorage
-  useEffect(() => {
-    const saved = localStorage.getItem('trades');
-    if (saved) {
-      setTrades(JSON.parse(saved));
+function getInitialCurrency(): CurrencyCode {
+  try {
+    const saved = localStorage.getItem(CURRENCY_STORAGE_KEY);
+    if (saved && isCurrencyCode(saved)) {
+      return saved;
     }
+  } catch {
+    // Ignore localStorage read errors and fallback.
+  }
+  return DEFAULT_CURRENCY;
+}
+
+export default function App() {
+  const tradeRepo = useMemo(() => new LocalTradeRepository(), []);
+  const goalRepo = useMemo(() => new LocalGoalRepository(), []);
+  const pricingService = useMemo(() => new ApiPricingService(), []);
+
+  const [trades, setTrades] = useState<Trade[]>(() => tradeRepo.listTrades());
+  const [goals, setGoals] = useState(() => goalRepo.listGoals());
+  const [reminders, setReminders] = useState(() => listActiveReminders());
+  const [currency, setCurrency] = useState<CurrencyCode>(() => getInitialCurrency());
+  const [tab, setTab] = useState<Tab>('overview');
+  const [search, setSearch] = useState('');
+  const [from, setFrom] = useState('');
+  const [to, setTo] = useState('');
+  const [flt, setFlt] = useState<FilterType>('all');
+  const [status, setStatus] = useState<StatusFilter>('all');
+  const [useUnrealized, setUseUnrealized] = useState(true);
+  const [isRefreshingMarks, setIsRefreshingMarks] = useState(false);
+  const [showForm, setShowForm] = useState(false);
+  const [editTrade, setEditTrade] = useState<Trade | null>(null);
+  const [manageTrade, setManageTrade] = useState<Trade | null>(null);
+
+  const currencyFormatter = useMemo(() => buildCurrencyFormatter(currency), [currency]);
+
+  const formatCurrency = (value: number): string => currencyFormatter.format(roundTo2(value));
+  const pnl = (value: number): string => `${value >= 0 ? '+' : ''}${formatCurrency(value)}`;
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setReminders(listActiveReminders()), 60000);
+    return () => window.clearInterval(timer);
   }, []);
 
-  // Save trades to localStorage
   useEffect(() => {
-    localStorage.setItem('trades', JSON.stringify(trades));
-  }, [trades]);
+    localStorage.setItem(CURRENCY_STORAGE_KEY, currency);
+  }, [currency]);
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    
-    const entryPrice = parseFloat(formData.entryPrice);
-    const exitPrice = parseFloat(formData.exitPrice);
-    const quantity = parseFloat(formData.quantity);
-    
-    const isLong = formData.direction === 'long';
-    const pnl = isLong 
-      ? (exitPrice - entryPrice) * quantity 
-      : (entryPrice - exitPrice) * quantity;
-    
-    const pnlPercent = isLong
-      ? ((exitPrice - entryPrice) / entryPrice) * 100
-      : ((entryPrice - exitPrice) / entryPrice) * 100;
-
-    const trade: Trade = {
-      id: editingTrade ? editingTrade.id : Date.now().toString(),
-      date: formData.date,
-      symbol: formData.symbol,
-      direction: formData.direction,
-      entryPrice,
-      exitPrice,
-      quantity,
-      pnl,
-      pnlPercent,
-      isWin: pnl > 0,
-      setup: formData.setup,
-      emotion: formData.emotion,
-      notes: formData.notes
-    };
-
-    if (editingTrade) {
-      setTrades(trades.map(t => t.id === trade.id ? trade : t));
-    } else {
-      setTrades([trade, ...trades]);
-    }
-
-    resetForm();
+  const submitTrade = (payload: TradeFormPayload) => {
+    const next = payload.mode === 'create'
+      ? tradeRepo.createOpenTrade(payload.data)
+      : payload.tradeId
+        ? tradeRepo.updateTrade(payload.tradeId, payload.data)
+        : trades;
+    setTrades(next);
+    setShowForm(false);
+    setEditTrade(null);
   };
 
-  const resetForm = () => {
-    setFormData({
-      date: new Date().toISOString().split('T')[0],
-      symbol: '',
-      direction: 'long',
-      entryPrice: '',
-      exitPrice: '',
-      quantity: '',
-      notes: '',
-      setup: '',
-      emotion: 'neutral'
-    });
-    setShowAddTrade(false);
-    setEditingTrade(null);
-  };
-
-  const startEdit = (trade: Trade) => {
-    setFormData({
-      date: trade.date,
-      symbol: trade.symbol,
-      direction: trade.direction,
-      entryPrice: trade.entryPrice.toString(),
-      exitPrice: trade.exitPrice.toString(),
-      quantity: trade.quantity.toString(),
-      notes: trade.notes || '',
-      setup: trade.setup || '',
-      emotion: trade.emotion || 'neutral'
-    });
-    setEditingTrade(trade);
-    setShowAddTrade(true);
-  };
-
-  const deleteTrade = (tradeId: string) => {
-    if (confirm('Delete this trade?')) {
-      setTrades(trades.filter(t => t.id !== tradeId));
+  const delTrade = (id: string) => {
+    if (window.confirm('Delete this trade?')) {
+      setTrades(tradeRepo.deleteTrade(id));
     }
   };
 
-  const exportToCSV = () => {
-    if (trades.length === 0) {
-      alert('No trades to export!');
+  const addLeg = (id: string, leg: AddExitLegInput) => {
+    const next = tradeRepo.addExitLeg(id, leg);
+    setTrades(next);
+    const updated = next.find((trade) => trade.id === id) ?? null;
+    setManageTrade(updated?.status === 'open' ? updated : null);
+  };
+
+  const saveMark = (id: string, mark: number | undefined) => {
+    const next = tradeRepo.updateMarkPrice(id, mark);
+    setTrades(next);
+    const updated = next.find((trade) => trade.id === id) ?? null;
+    setManageTrade(updated?.status === 'open' ? updated : null);
+  };
+
+  const refreshOpenTradeMarks = async () => {
+    const symbols = Array.from(
+      new Set(
+        trades
+          .filter((trade) => trade.status === 'open')
+          .map((trade) => trade.symbol.trim().toUpperCase())
+          .filter(Boolean)
+      )
+    );
+
+    if (symbols.length === 0) {
+      alert('No open trades available for mark-price refresh.');
       return;
     }
 
-    const headers = ['Date', 'Symbol', 'Direction', 'Entry', 'Exit', 'Quantity', 'P&L', 'P&L %', 'Setup', 'Emotion', 'Notes'];
-    
-    const rows = trades.map(trade => [
-      trade.date,
-      trade.symbol,
-      trade.direction,
-      trade.entryPrice,
-      trade.exitPrice,
-      trade.quantity,
-      trade.pnl.toFixed(2),
-      trade.pnlPercent.toFixed(2),
-      trade.setup || '',
-      trade.emotion || '',
-      trade.notes || ''
-    ]);
+    setIsRefreshingMarks(true);
+    try {
+      const pricesBySymbol: Record<string, number> = {};
+      await Promise.all(
+        symbols.map(async (symbol) => {
+          const price = await pricingService.getMarkPrice(symbol);
+          if (price != null) {
+            pricesBySymbol[symbol] = roundTo2(price);
+          }
+        })
+      );
 
-    const csvContent = [
-      headers.join(','),
-      ...rows.map(row => row.join(','))
-    ].join('\n');
-
-    const blob = new Blob([csvContent], { type: 'text/csv' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `trades_${new Date().toISOString().split('T')[0]}.csv`;
-    link.click();
-    URL.revokeObjectURL(url);
-  };
-
-  // Filter trades
-  const filteredTrades = trades.filter(trade => {
-    if (searchTerm && !trade.symbol.toLowerCase().includes(searchTerm.toLowerCase())) {
-      return false;
-    }
-    
-    if (dateFrom && trade.date < dateFrom) {
-      return false;
-    }
-    
-    if (dateTo && trade.date > dateTo) {
-      return false;
-    }
-    
-    if (filterType === 'wins' && !trade.isWin) {
-      return false;
-    }
-    if (filterType === 'losses' && trade.isWin) {
-      return false;
-    }
-    
-    return true;
-  });
-
-  // Calculate statistics
-  const stats = {
-    totalTrades: trades.length,
-    winningTrades: trades.filter(t => t.isWin).length,
-    losingTrades: trades.filter(t => !t.isWin).length,
-    totalPnL: trades.reduce((sum, t) => sum + t.pnl, 0),
-    avgWin: trades.filter(t => t.isWin).reduce((sum, t) => sum + t.pnl, 0) / (trades.filter(t => t.isWin).length || 1),
-    avgLoss: trades.filter(t => !t.isWin).reduce((sum, t) => sum + t.pnl, 0) / (trades.filter(t => !t.isWin).length || 1),
-    winRate: trades.length > 0 ? (trades.filter(t => t.isWin).length / trades.length) * 100 : 0
-  };
-
-  // Prepare chart data
-  const cumulativePnL = trades
-    .slice()
-    .reverse()
-    .reduce((acc: any[], trade, index) => {
-      const cumulative = index === 0 ? trade.pnl : acc[index - 1].cumulative + trade.pnl;
-      acc.push({
-        date: trade.date,
-        cumulative,
-        trade: trade.pnl
+      const next = tradeRepo.updateOpenTradeMarks(pricesBySymbol);
+      setTrades(next);
+      setManageTrade((current) => {
+        if (!current) {
+          return current;
+        }
+        const updated = next.find((trade) => trade.id === current.id) ?? null;
+        return updated?.status === 'open' ? updated : null;
       });
-      return acc;
-    }, []);
 
-  const monthlyData = trades.reduce((acc: any, trade) => {
-    const month = trade.date.substring(0, 7);
-    if (!acc[month]) {
-      acc[month] = { month, pnl: 0, trades: 0 };
+      if (Object.keys(pricesBySymbol).length === 0) {
+        alert('Price refresh completed, but no symbol quotes were returned by the API.');
+      }
+    } finally {
+      setIsRefreshingMarks(false);
     }
-    acc[month].pnl += trade.pnl;
-    acc[month].trades += 1;
-    return acc;
-  }, {});
+  };
 
-  const monthlyChart = Object.values(monthlyData).sort((a: any, b: any) => a.month.localeCompare(b.month));
+  const summary = useMemo(() => {
+    const closed = trades.filter((trade) => trade.status === 'closed');
+    const realized = roundTo2(trades.reduce((sum, trade) => sum + trade.realizedPnl, 0));
+    const unrealized = roundTo2(trades.reduce((sum, trade) => sum + trade.unrealizedPnl, 0));
+    const wins = closed.filter((trade) => trade.realizedPnl > 0).length;
+    const losses = closed.filter((trade) => trade.realizedPnl < 0).length;
+    return {
+      open: trades.filter((trade) => trade.status === 'open').length,
+      realized,
+      unrealized,
+      total: roundTo2(realized + unrealized),
+      winRate: closed.length ? (wins / closed.length) * 100 : 0,
+      wins,
+      losses,
+    };
+  }, [trades]);
 
-  const winLossData = [
-    { name: 'Wins', value: stats.winningTrades, color: '#10b981' },
-    { name: 'Losses', value: stats.losingTrades, color: '#ef4444' }
+  const shown = useMemo(
+    () =>
+      trades.filter((trade) => {
+        if (search && !trade.symbol.toLowerCase().includes(search.toLowerCase())) return false;
+        if (from && trade.date < from) return false;
+        if (to && trade.date > to) return false;
+        if (status !== 'all' && trade.status !== status) return false;
+        if (flt === 'wins' && trade.totalPnl <= 0) return false;
+        if (flt === 'losses' && trade.totalPnl >= 0) return false;
+        return true;
+      }),
+    [trades, search, from, to, status, flt]
+  );
+
+  const analytics = useMemo(() => buildAnalyticsSummary(trades, useUnrealized), [trades, useUnrealized]);
+
+  const lineData = useMemo(() => {
+    return [...trades]
+      .sort((a, b) => a.date.localeCompare(b.date))
+      .reduce<Array<{ date: string; realized: number; provisional: number }>>((acc, trade) => {
+        const prev = acc[acc.length - 1];
+        const realized = roundTo2((prev?.realized ?? 0) + trade.realizedPnl);
+        const provisional = roundTo2((prev?.provisional ?? 0) + trade.totalPnl);
+        acc.push({ date: trade.date, realized, provisional });
+        return acc;
+      }, []);
+  }, [trades]);
+
+  const monthData = useMemo(() => {
+    const monthly = new Map<string, { month: string; realized: number; provisional: number }>();
+    trades.forEach((trade) => {
+      const key = trade.date.slice(0, 7);
+      const curr = monthly.get(key) ?? { month: key, realized: 0, provisional: 0 };
+      curr.realized += trade.realizedPnl;
+      curr.provisional += trade.totalPnl;
+      monthly.set(key, curr);
+    });
+    return Array.from(monthly.values()).sort((a, b) => a.month.localeCompare(b.month));
+  }, [trades]);
+
+  const pieData = [
+    { name: 'Wins', value: summary.wins, color: C.pos },
+    { name: 'Losses', value: summary.losses, color: C.neg },
+  ];
+  const currentPeriod = periodNow();
+  const periodGoals = goals.filter((goal) => goal.period === currentPeriod);
+  const goalProgress = getGoalProgress(periodGoals, trades);
+
+  const tabs: Array<{ id: Tab; label: string; badge?: number }> = [
+    { id: 'overview', label: 'Overview', badge: reminders.length || undefined },
+    { id: 'trades', label: 'Trades', badge: summary.open || undefined },
+    { id: 'analytics', label: 'Analytics' },
+    {
+      id: 'goals',
+      label: 'Goals',
+      badge: goalProgress.filter((goal) => goal.status === 'at_risk').length || undefined,
+    },
   ];
 
   return (
-    <div className="min-h-screen bg-gray-50 p-4">
-      <div className="max-w-7xl mx-auto">
-        {/* Header */}
-        <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
-          <div className="flex justify-between items-center">
+    <div className="min-h-screen bg-[var(--bg)] pb-20 text-[var(--text)] md:pb-8">
+      <div className="mx-auto max-w-7xl space-y-4 px-4 py-4">
+        <header className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <div>
-              <h1 className="text-3xl font-bold text-gray-900">Trading Journal Pro</h1>
-              <p className="text-gray-600 mt-1">Track your trades and analyze performance</p>
-            </div>
-            <div className="flex gap-3">
-              <button
-                onClick={exportToCSV}
-                className="bg-green-600 text-white px-6 py-3 rounded-lg flex items-center gap-2 hover:bg-green-700 transition-colors"
-              >
-                <Download size={20} />
-                Export CSV
-              </button>
-              <button
-                onClick={() => setShowAddTrade(true)}
-                className="bg-blue-600 text-white px-6 py-3 rounded-lg flex items-center gap-2 hover:bg-blue-700 transition-colors"
-              >
-                <Plus size={20} />
-                Add Trade
-              </button>
-            </div>
-          </div>
-        </div>
-
-        {/* Stats Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-          <div className="bg-white rounded-lg shadow-sm p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-gray-600 text-sm">Total P&L</p>
-                <p className={`text-2xl font-bold ${stats.totalPnL >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                  ${stats.totalPnL.toFixed(2)}
-                </p>
-              </div>
-              <DollarSign className={`${stats.totalPnL >= 0 ? 'text-green-600' : 'text-red-600'}`} size={32} />
-            </div>
-          </div>
-
-          <div className="bg-white rounded-lg shadow-sm p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-gray-600 text-sm">Win Rate</p>
-                <p className="text-2xl font-bold text-gray-900">{stats.winRate.toFixed(1)}%</p>
-              </div>
-              <TrendingUp className="text-blue-600" size={32} />
-            </div>
-            <p className="text-xs text-gray-500 mt-2">{stats.winningTrades}W / {stats.losingTrades}L</p>
-          </div>
-
-          <div className="bg-white rounded-lg shadow-sm p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-gray-600 text-sm">Avg Win</p>
-                <p className="text-2xl font-bold text-green-600">${stats.avgWin.toFixed(2)}</p>
-              </div>
-              <TrendingUp className="text-green-600" size={32} />
-            </div>
-          </div>
-
-          <div className="bg-white rounded-lg shadow-sm p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-gray-600 text-sm">Avg Loss</p>
-                <p className="text-2xl font-bold text-red-600">${stats.avgLoss.toFixed(2)}</p>
-              </div>
-              <TrendingDown className="text-red-600" size={32} />
-            </div>
-          </div>
-        </div>
-
-        {/* Filters */}
-        <div className="bg-white rounded-lg shadow-sm p-4 mb-6">
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-            <input
-              type="text"
-              placeholder="Search symbol..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
-            
-            <input
-              type="date"
-              value={dateFrom}
-              onChange={(e) => setDateFrom(e.target.value)}
-              className="border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-              placeholder="From date"
-            />
-            
-            <input
-              type="date"
-              value={dateTo}
-              onChange={(e) => setDateTo(e.target.value)}
-              className="border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-              placeholder="To date"
-            />
-            
-            <select
-              value={filterType}
-              onChange={(e) => setFilterType(e.target.value as 'all' | 'wins' | 'losses')}
-              className="border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-            >
-              <option value="all">All Trades</option>
-              <option value="wins">Wins Only</option>
-              <option value="losses">Losses Only</option>
-            </select>
-          </div>
-          {(searchTerm || dateFrom || dateTo || filterType !== 'all') && (
-            <div className="mt-3 flex items-center justify-between">
-              <p className="text-sm text-gray-600">
-                Showing {filteredTrades.length} of {trades.length} trades
+              <h1 className="text-2xl font-bold">Trading Journal Pro</h1>
+              <p className="text-sm text-[var(--muted)]">
+                Dark mode, open/closed lifecycle, partial exits, analytics, goals, and live mark refresh.
               </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <select
+                value={currency}
+                onChange={(event) => setCurrency(event.target.value as CurrencyCode)}
+                className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-sm"
+                title="Display currency"
+              >
+                {MAJOR_CURRENCIES.map((currencyOption) => (
+                  <option key={currencyOption.code} value={currencyOption.code}>
+                    {currencyOption.label}
+                  </option>
+                ))}
+              </select>
+              <button
+                onClick={() => exportTradesToCsv(trades)}
+                className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-sm"
+              >
+                <Download size={14} className="inline" /> Export
+              </button>
               <button
                 onClick={() => {
-                  setSearchTerm('');
-                  setDateFrom('');
-                  setDateTo('');
-                  setFilterType('all');
+                  void refreshOpenTradeMarks();
                 }}
-                className="text-sm text-blue-600 hover:underline"
+                disabled={isRefreshingMarks}
+                className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-sm disabled:opacity-60"
               >
-                Clear Filters
+                <RefreshCw size={14} className={`inline ${isRefreshingMarks ? 'animate-spin' : ''}`} />{' '}
+                {isRefreshingMarks ? 'Refreshing' : 'Refresh Marks'}
+              </button>
+              <button
+                onClick={() => {
+                  setEditTrade(null);
+                  setShowForm(true);
+                }}
+                className="rounded-lg bg-[var(--accent)] px-3 py-2 text-sm font-semibold text-black"
+              >
+                <Plus size={14} className="inline" /> Add Trade
               </button>
             </div>
-          )}
-        </div>
+          </div>
+        </header>
 
-        {/* Tabs */}
-        <div className="bg-white rounded-lg shadow-sm mb-6">
-          <div className="flex border-b">
-            <button
-              onClick={() => setActiveTab('overview')}
-              className={`px-6 py-3 font-medium ${activeTab === 'overview' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-gray-600'}`}
+        <section className="grid grid-cols-2 gap-3 lg:grid-cols-5">
+          <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-3">
+            <p className="text-xs text-[var(--muted)]">Realized</p>
+            <p className={`text-lg font-semibold ${pnlClass(summary.realized)}`}>{pnl(summary.realized)}</p>
+          </div>
+          <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-3">
+            <p className="text-xs text-[var(--muted)]">Unrealized</p>
+            <p className={`text-lg font-semibold ${pnlClass(summary.unrealized)}`}>{pnl(summary.unrealized)}</p>
+          </div>
+          <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-3">
+            <p className="text-xs text-[var(--muted)]">Total</p>
+            <p className={`text-lg font-semibold ${pnlClass(summary.total)}`}>{pnl(summary.total)}</p>
+          </div>
+          <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-3">
+            <p className="text-xs text-[var(--muted)]">Win Rate</p>
+            <p className="text-lg font-semibold">{summary.winRate.toFixed(1)}%</p>
+            <p className="text-xs text-[var(--muted)]">
+              {summary.wins}W/{summary.losses}L
+            </p>
+          </div>
+          <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-3">
+            <p className="text-xs text-[var(--muted)]">Open Trades</p>
+            <p className="text-lg font-semibold text-[var(--accent)]">{summary.open}</p>
+          </div>
+        </section>
+
+        <section className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-3">
+          <div className="grid gap-2 md:grid-cols-5">
+            <input
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Search symbol"
+              className="rounded border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-sm"
+            />
+            <input
+              type="date"
+              value={from}
+              onChange={(event) => setFrom(event.target.value)}
+              className="rounded border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-sm"
+            />
+            <input
+              type="date"
+              value={to}
+              onChange={(event) => setTo(event.target.value)}
+              className="rounded border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-sm"
+            />
+            <select
+              value={status}
+              onChange={(event) => setStatus(event.target.value as StatusFilter)}
+              className="rounded border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-sm"
             >
-              Overview
-            </button>
-            <button
-              onClick={() => setActiveTab('trades')}
-              className={`px-6 py-3 font-medium ${activeTab === 'trades' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-gray-600'}`}
+              <option value="all">All status</option>
+              <option value="open">Open</option>
+              <option value="closed">Closed</option>
+            </select>
+            <select
+              value={flt}
+              onChange={(event) => setFlt(event.target.value as FilterType)}
+              className="rounded border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-sm"
             >
-              All Trades ({filteredTrades.length})
-            </button>
-            <button
-              onClick={() => setActiveTab('analytics')}
-              className={`px-6 py-3 font-medium ${activeTab === 'analytics' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-gray-600'}`}
-            >
-              Analytics
-            </button>
+              <option value="all">All P&amp;L</option>
+              <option value="wins">Winners</option>
+              <option value="losses">Losers</option>
+            </select>
+          </div>
+        </section>
+
+        <section className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
+          <div className="mb-4 flex gap-2 overflow-auto">
+            {tabs.map((tabItem) => (
+              <button
+                key={tabItem.id}
+                onClick={() => setTab(tabItem.id)}
+                className={`rounded-lg px-3 py-2 text-sm ${
+                  tab === tabItem.id ? 'bg-[var(--surface-2)] text-[var(--accent)]' : 'text-[var(--muted)]'
+                }`}
+              >
+                {tabItem.label}
+                {tabItem.badge ? ` (${tabItem.badge})` : ''}
+              </button>
+            ))}
           </div>
 
-          <div className="p-6">
-            {/* Overview Tab */}
-            {activeTab === 'overview' && (
-              <div className="space-y-6">
-                <div>
-                  <h3 className="text-lg font-semibold mb-4">Cumulative P&L</h3>
-                  {cumulativePnL.length > 0 ? (
-                    <ResponsiveContainer width="100%" height={300}>
-                      <LineChart data={cumulativePnL}>
-                        <CartesianGrid strokeDasharray="3 3" />
-                        <XAxis dataKey="date" />
-                        <YAxis />
-                        <Tooltip />
-                        <Legend />
-                        <Line type="monotone" dataKey="cumulative" stroke="#3b82f6" strokeWidth={2} name="Cumulative P&L" />
-                      </LineChart>
-                    </ResponsiveContainer>
-                  ) : (
-                    <div className="text-center py-12 text-gray-500">
-                      No trades yet. Add your first trade to see your performance!
-                    </div>
-                  )}
-                </div>
-
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {tab === 'overview' && (
+            <div className="space-y-4">
+              {reminders.map((reminder) => (
+                <div
+                  key={reminder.id}
+                  className="flex items-start justify-between rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-3"
+                >
                   <div>
-                    <h3 className="text-lg font-semibold mb-4">Recent Trades</h3>
-                    <div className="space-y-2">
-                      {filteredTrades.slice(0, 5).map(trade => (
-                        <div key={trade.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-                          <div>
-                            <p className="font-medium">{trade.symbol}</p>
-                            <p className="text-sm text-gray-600">{trade.date}</p>
-                          </div>
-                          <div className={`text-right ${trade.isWin ? 'text-green-600' : 'text-red-600'}`}>
-                            <p className="font-bold">${trade.pnl.toFixed(2)}</p>
-                            <p className="text-sm">{trade.pnlPercent.toFixed(2)}%</p>
-                          </div>
-                        </div>
-                      ))}
-                      {filteredTrades.length === 0 && (
-                        <div className="text-center py-8 text-gray-500">
-                          No trades match your filters
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  <div>
-                    <h3 className="text-lg font-semibold mb-4">Win/Loss Distribution</h3>
-                    {stats.totalTrades > 0 ? (
-                      <ResponsiveContainer width="100%" height={200}>
-                        <PieChart>
-                          <Pie
-                            data={winLossData}
-                            cx="50%"
-                            cy="50%"
-                            labelLine={false}
-                            label={(entry) => `${entry.name}: ${entry.value}`}
-                            outerRadius={80}
-                            fill="#8884d8"
-                            dataKey="value"
-                          >
-                            {winLossData.map((entry, index) => (
-                              <Cell key={`cell-${index}`} fill={entry.color} />
-                            ))}
-                          </Pie>
-                          <Tooltip />
-                        </PieChart>
-                      </ResponsiveContainer>
-                    ) : (
-                      <div className="text-center py-12 text-gray-500">
-                        No data to display
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* All Trades Tab */}
-            {activeTab === 'trades' && (
-              <div>
-                {filteredTrades.length === 0 ? (
-                  <div className="text-center py-12">
-                    <p className="text-gray-600">
-                      {trades.length === 0 ? 'No trades recorded yet' : 'No trades match your filters'}
+                    <p className="text-sm font-semibold">
+                      <AlarmClockCheck size={14} className="mr-1 inline text-[var(--accent)]" />
+                      {reminder.title}
                     </p>
-                    {trades.length === 0 && (
-                      <button
-                        onClick={() => setShowAddTrade(true)}
-                        className="mt-4 text-blue-600 hover:text-blue-700"
-                      >
-                        Add your first trade
-                      </button>
-                    )}
+                    <p className="text-xs text-[var(--muted)]">{reminder.description}</p>
                   </div>
-                ) : (
-                  <div className="overflow-x-auto">
-                    <table className="w-full">
-                      <thead>
-                        <tr className="border-b">
-                          <th className="text-left p-3">Date</th>
-                          <th className="text-left p-3">Symbol</th>
-                          <th className="text-left p-3">Direction</th>
-                          <th className="text-right p-3">Entry</th>
-                          <th className="text-right p-3">Exit</th>
-                          <th className="text-right p-3">Qty</th>
-                          <th className="text-right p-3">P&L</th>
-                          <th className="text-right p-3">%</th>
-                          <th className="text-right p-3">Actions</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {filteredTrades.map(trade => (
-                          <tr key={trade.id} className="border-b hover:bg-gray-50 transition-colors">
-                            <td className="p-3">{trade.date}</td>
-                            <td className="p-3 font-medium">{trade.symbol}</td>
-                            <td className="p-3">
-                              <span className={`px-2 py-1 rounded text-xs ${trade.direction === 'long' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
-                                {trade.direction.toUpperCase()}
-                              </span>
-                            </td>
-                            <td className="p-3 text-right">${trade.entryPrice.toFixed(2)}</td>
-                            <td className="p-3 text-right">${trade.exitPrice.toFixed(2)}</td>
-                            <td className="p-3 text-right">{trade.quantity}</td>
-                            <td className={`p-3 text-right font-bold ${trade.isWin ? 'text-green-600' : 'text-red-600'}`}>
-                              ${trade.pnl.toFixed(2)}
-                            </td>
-                            <td className={`p-3 text-right ${trade.isWin ? 'text-green-600' : 'text-red-600'}`}>
-                              {trade.pnlPercent.toFixed(2)}%
-                            </td>
-                            <td className="p-3 text-right">
-                              <div className="flex justify-end gap-2">
-                                <button
-                                  onClick={() => startEdit(trade)}
-                                  className="text-blue-600 hover:text-blue-700 transition-colors"
-                                >
-                                  <Edit2 size={16} />
-                                </button>
-                                <button
-                                  onClick={() => deleteTrade(trade.id)}
-                                  className="text-red-600 hover:text-red-700 transition-colors"
-                                >
-                                  <Trash2 size={16} />
-                                </button>
-                              </div>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Analytics Tab */}
-            {activeTab === 'analytics' && (
-              <div className="space-y-6">
-                <div>
-                  <h3 className="text-lg font-semibold mb-4">Monthly Performance</h3>
-                  {monthlyChart.length > 0 ? (
-                    <ResponsiveContainer width="100%" height={300}>
-                      <BarChart data={monthlyChart}>
-                        <CartesianGrid strokeDasharray="3 3" />
-                        <XAxis dataKey="month" />
-                        <YAxis />
-                        <Tooltip />
-                        <Legend />
-                        <Bar dataKey="pnl" fill="#3b82f6" name="P&L" />
-                      </BarChart>
-                    </ResponsiveContainer>
-                  ) : (
-                    <div className="text-center py-12 text-gray-500">
-                      No data to display
-                    </div>
-                  )}
+                  <button
+                    onClick={() => {
+                      completeReminder(reminder.kind);
+                      setReminders(listActiveReminders());
+                    }}
+                    className="rounded bg-[var(--accent)] px-2 py-1 text-xs font-semibold text-black"
+                  >
+                    Done
+                  </button>
                 </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  <div className="bg-gray-50 rounded-lg p-6">
-                    <h4 className="font-semibold mb-4">Performance Metrics</h4>
-                    <div className="space-y-3">
-                      <div className="flex justify-between">
-                        <span className="text-gray-600">Total Trades:</span>
-                        <span className="font-medium">{stats.totalTrades}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-gray-600">Win Rate:</span>
-                        <span className="font-medium">{stats.winRate.toFixed(1)}%</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-gray-600">Total P&L:</span>
-                        <span className={`font-medium ${stats.totalPnL >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                          ${stats.totalPnL.toFixed(2)}
-                        </span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-gray-600">Profit Factor:</span>
-                        <span className="font-medium">
-                          {stats.avgLoss !== 0 ? (Math.abs(stats.avgWin / stats.avgLoss)).toFixed(2) : 'N/A'}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="bg-gray-50 rounded-lg p-6">
-                    <h4 className="font-semibold mb-4">Trade Statistics</h4>
-                    <div className="space-y-3">
-                      <div className="flex justify-between">
-                        <span className="text-gray-600">Average Win:</span>
-                        <span className="font-medium text-green-600">${stats.avgWin.toFixed(2)}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-gray-600">Average Loss:</span>
-                        <span className="font-medium text-red-600">${stats.avgLoss.toFixed(2)}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-gray-600">Winning Trades:</span>
-                        <span className="font-medium text-green-600">{stats.winningTrades}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-gray-600">Losing Trades:</span>
-                        <span className="font-medium text-red-600">{stats.losingTrades}</span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
+              ))}
+              <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-3">
+                <p className="mb-2 text-xs uppercase text-[var(--muted)]">Cumulative Realized vs Provisional</p>
+                <ResponsiveContainer width="100%" height={260}>
+                  <LineChart data={lineData}>
+                    <CartesianGrid stroke={C.grid} strokeDasharray="3 3" />
+                    <XAxis dataKey="date" stroke={C.text} />
+                    <YAxis stroke={C.text} />
+                    <Tooltip />
+                    <Line dataKey="realized" stroke={C.realized} />
+                    <Line dataKey="provisional" stroke={C.provisional} />
+                  </LineChart>
+                </ResponsiveContainer>
               </div>
-            )}
-          </div>
-        </div>
+            </div>
+          )}
 
-        {/* Footer */}
-        <div className="bg-white rounded-lg shadow-sm p-6 text-center">
-          <p className="text-gray-600">
-            Built with React + TypeScript + Tailwind CSS | 
-            <a href="https://github.com" className="text-blue-600 hover:underline ml-2">
-              View on GitHub
-            </a>
-          </p>
-        </div>
-      </div>
+          {tab === 'trades' && (
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[900px] text-sm">
+                <thead>
+                  <tr className="border-b border-[var(--border)] text-left text-xs text-[var(--muted)]">
+                    <th className="p-2">Date</th>
+                    <th className="p-2">Symbol</th>
+                    <th className="p-2">Status</th>
+                    <th className="p-2 text-right">Entry</th>
+                    <th className="p-2 text-right">Qty</th>
+                    <th className="p-2 text-right">Remaining</th>
+                    <th className="p-2 text-right">Mark</th>
+                    <th className="p-2 text-right">Realized</th>
+                    <th className="p-2 text-right">Unrealized</th>
+                    <th className="p-2 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {shown.map((trade) => (
+                    <tr key={trade.id} className="border-b border-[var(--border)]">
+                      <td className="p-2">{trade.date}</td>
+                      <td className="p-2 font-semibold">{trade.symbol}</td>
+                      <td className="p-2">
+                        <span
+                          className={`rounded px-2 py-1 text-[10px] ${
+                            trade.status === 'open'
+                              ? 'bg-[color:rgba(250,204,21,0.2)] text-[var(--accent)]'
+                              : 'bg-[color:rgba(34,197,94,0.2)] text-[var(--positive)]'
+                          }`}
+                        >
+                          {trade.status}
+                        </span>
+                      </td>
+                      <td className="p-2 text-right">{formatCurrency(trade.entryPrice)}</td>
+                      <td className="p-2 text-right">{trade.quantity.toFixed(2)}</td>
+                      <td className="p-2 text-right">{getRemainingQuantity(trade).toFixed(2)}</td>
+                      <td className="p-2 text-right">{trade.markPrice != null ? formatCurrency(trade.markPrice) : '-'}</td>
+                      <td className={`p-2 text-right ${pnlClass(trade.realizedPnl)}`}>{pnl(trade.realizedPnl)}</td>
+                      <td className={`p-2 text-right ${pnlClass(trade.unrealizedPnl)}`}>{pnl(trade.unrealizedPnl)}</td>
+                      <td className="p-2 text-right">
+                        <div className="flex justify-end gap-1">
+                          {trade.status === 'open' ? (
+                            <button
+                              onClick={() => setManageTrade(trade)}
+                              className="rounded border border-[var(--border)] px-2 py-1 text-xs text-[var(--accent)]"
+                            >
+                              Manage
+                            </button>
+                          ) : null}
+                          <button
+                            onClick={() => {
+                              setEditTrade(trade);
+                              setShowForm(true);
+                            }}
+                            className="rounded border border-[var(--border)] p-1"
+                          >
+                            <Edit2 size={12} />
+                          </button>
+                          <button onClick={() => delTrade(trade.id)} className="rounded border border-[var(--border)] p-1">
+                            <Trash2 size={12} />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
 
-      {/* Add/Edit Trade Modal */}
-      {showAddTrade && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-lg max-w-2xl w-full max-h-[90vh] overflow-y-auto">
-            <div className="p-6">
-              <div className="flex justify-between items-center mb-6">
-                <h2 className="text-2xl font-bold">
-                  {editingTrade ? 'Edit Trade' : 'Add New Trade'}
-                </h2>
-                <button onClick={resetForm} className="text-gray-500 hover:text-gray-700">
-                  <X size={24} />
+          {tab === 'analytics' && (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-3">
+                <p className="text-sm">Analytics mode: {useUnrealized ? 'Realized + unrealized' : 'Realized only'}</p>
+                <button
+                  onClick={() => setUseUnrealized((value) => !value)}
+                  className="rounded border border-[var(--border)] px-2 py-1 text-sm"
+                >
+                  Toggle
                 </button>
               </div>
-
-              <form onSubmit={handleSubmit} className="space-y-4">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Date</label>
-                    <input
-                      type="date"
-                      value={formData.date}
-                      onChange={e => setFormData({...formData, date: e.target.value})}
-                      className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      required
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Symbol</label>
-                    <input
-                      type="text"
-                      value={formData.symbol}
-                      onChange={e => setFormData({...formData, symbol: e.target.value.toUpperCase()})}
-                      className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      placeholder="AAPL"
-                      required
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Direction</label>
-                    <select
-                      value={formData.direction}
-                      onChange={e => setFormData({...formData, direction: e.target.value as 'long' | 'short'})}
-                      className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    >
-                      <option value="long">Long</option>
-                      <option value="short">Short</option>
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Quantity</label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      value={formData.quantity}
-                      onChange={e => setFormData({...formData, quantity: e.target.value})}
-                      className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      placeholder="100"
-                      required
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Entry Price</label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      value={formData.entryPrice}
-                      onChange={e => setFormData({...formData, entryPrice: e.target.value})}
-                      className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      placeholder="150.00"
-                      required
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Exit Price</label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      value={formData.exitPrice}
-                      onChange={e => setFormData({...formData, exitPrice: e.target.value})}
-                      className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      placeholder="155.00"
-                      required
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Setup/Strategy</label>
-                    <input
-                      type="text"
-                      value={formData.setup}
-                      onChange={e => setFormData({...formData, setup: e.target.value})}
-                      className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      placeholder="Breakout, VWAP bounce, etc."
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Emotional State</label>
-                    <select
-                      value={formData.emotion}
-                      onChange={e => setFormData({...formData, emotion: e.target.value})}
-                      className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    >
-                      <option value="confident">Confident</option>
-                      <option value="neutral">Neutral</option>
-                      <option value="anxious">Anxious</option>
-                      <option value="fomo">FOMO</option>
-                      <option value="revenge">Revenge Trading</option>
-                    </select>
-                  </div>
+              <div className="grid gap-3 lg:grid-cols-2">
+                <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-3">
+                  <p className="mb-2 text-xs uppercase text-[var(--muted)]">Monthly Performance</p>
+                  <ResponsiveContainer width="100%" height={240}>
+                    <BarChart data={monthData}>
+                      <CartesianGrid stroke={C.grid} strokeDasharray="3 3" />
+                      <XAxis dataKey="month" stroke={C.text} />
+                      <YAxis stroke={C.text} />
+                      <Tooltip />
+                      <Bar dataKey="realized" fill={C.realized} />
+                      <Bar dataKey="provisional" fill={C.provisional} />
+                    </BarChart>
+                  </ResponsiveContainer>
                 </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Notes</label>
-                  <textarea
-                    value={formData.notes}
-                    onChange={e => setFormData({...formData, notes: e.target.value})}
-                    className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    rows={4}
-                    placeholder="What went well? What could be improved? Market conditions, etc."
-                  />
+                <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-3">
+                  <p className="mb-2 text-xs uppercase text-[var(--muted)]">Win/Loss (closed trades)</p>
+                  <ResponsiveContainer width="100%" height={240}>
+                    <PieChart>
+                      <Pie data={pieData} dataKey="value" cx="50%" cy="50%" outerRadius={75}>
+                        {pieData.map((entry, index) => (
+                          <Cell key={index} fill={entry.color} />
+                        ))}
+                      </Pie>
+                      <Tooltip />
+                    </PieChart>
+                  </ResponsiveContainer>
                 </div>
-
-                <div className="flex gap-3">
-                  <button
-                    type="submit"
-                    className="flex-1 bg-blue-600 text-white py-3 rounded-lg hover:bg-blue-700 transition-colors font-medium"
-                  >
-                    {editingTrade ? 'Update Trade' : 'Add Trade'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={resetForm}
-                    className="px-6 py-3 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
-                  >
-                    Cancel
-                  </button>
+              </div>
+              <div className="grid gap-3 md:grid-cols-3">
+                <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-3">
+                  <p className="text-xs text-[var(--muted)]">Best Setup (&gt;=3)</p>
+                  <p className="font-semibold">{analytics.bestSetup?.key ?? 'N/A'}</p>
+                  <p className={pnlClass(analytics.bestSetup?.pnl ?? 0)}>
+                    {analytics.bestSetup ? pnl(analytics.bestSetup.pnl) : '-'}
+                  </p>
                 </div>
-              </form>
+                <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-3">
+                  <p className="text-xs text-[var(--muted)]">Worst Setup (&gt;=3)</p>
+                  <p className="font-semibold">{analytics.worstSetup?.key ?? 'N/A'}</p>
+                  <p className={pnlClass(analytics.worstSetup?.pnl ?? 0)}>
+                    {analytics.worstSetup ? pnl(analytics.worstSetup.pnl) : '-'}
+                  </p>
+                </div>
+                <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-3">
+                  <p className="text-xs text-[var(--muted)]">Emotion Groups</p>
+                  <p className="font-semibold">{analytics.emotionPerformance.length}</p>
+                  <p className="text-xs text-[var(--muted)]">
+                    Weekday groups: {analytics.weekdayPerformance.length}
+                  </p>
+                </div>
+              </div>
             </div>
-          </div>
+          )}
+
+          {tab === 'goals' && (
+            <GoalsPanel
+              period={currentPeriod}
+              goals={periodGoals}
+              progress={goalProgress}
+              formatCurrency={formatCurrency}
+              onSaveGoal={(type: GoalType, target: number) =>
+                setGoals(goalRepo.upsertGoal({ type, period: currentPeriod, target }))
+              }
+              onDeleteGoal={(id: string) => setGoals(goalRepo.deleteGoal(id))}
+            />
+          )}
+        </section>
+      </div>
+
+      <nav className="fixed bottom-0 left-0 right-0 z-40 border-t border-[var(--border)] bg-[var(--surface)] p-2 md:hidden">
+        <div className="grid grid-cols-4 gap-1">
+          {tabs.map((tabItem) => (
+            <button
+              key={tabItem.id}
+              onClick={() => setTab(tabItem.id)}
+              className={`rounded px-2 py-2 text-xs ${
+                tab === tabItem.id ? 'bg-[var(--surface-2)] text-[var(--accent)]' : 'text-[var(--muted)]'
+              }`}
+            >
+              {tabItem.id === 'goals' ? <Target size={12} className="mr-1 inline" /> : null}
+              {tabItem.label}
+              {tabItem.badge ? ` ${tabItem.badge}` : ''}
+            </button>
+          ))}
         </div>
-      )}
+      </nav>
+
+      {showForm ? (
+        <TradeFormModal
+          key={editTrade?.id ?? 'create'}
+          isOpen={showForm}
+          trade={editTrade}
+          currency={currency}
+          onClose={() => {
+            setShowForm(false);
+            setEditTrade(null);
+          }}
+          onSubmit={submitTrade}
+        />
+      ) : null}
+
+      {manageTrade ? (
+        <CloseTradeModal
+          key={manageTrade.id}
+          trade={manageTrade}
+          currency={currency}
+          formatCurrency={formatCurrency}
+          onClose={() => setManageTrade(null)}
+          onConfirmExit={addLeg}
+          onUpdateMarkPrice={saveMark}
+        />
+      ) : null}
     </div>
   );
 }
-
-export default App;
