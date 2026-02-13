@@ -1,7 +1,22 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { User } from '@supabase/supabase-js';
 import { Bar, BarChart, CartesianGrid, Cell, Line, LineChart, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { AlarmClockCheck, Download, Edit2, LogIn, LogOut, Plus, RefreshCw, Settings, Target, Trash2 } from 'lucide-react';
+import {
+  AlarmClockCheck,
+  CandlestickChart,
+  Download,
+  Edit2,
+  LayoutGrid,
+  List,
+  LogIn,
+  LogOut,
+  Plus,
+  RefreshCw,
+  Settings,
+  Target,
+  Trash2,
+  Wallet,
+} from 'lucide-react';
 import type { GoalType } from './shared/types/goal';
 import type { AddExitLegInput, Trade } from './shared/types/trade';
 import { LocalTradeRepository } from './features/trades/repository/tradeRepository';
@@ -27,6 +42,7 @@ import { supabase } from './supabaseClient';
 
 type Tab = 'trades' | 'history' | 'overview' | 'analytics' | 'goals' | 'settings';
 type FilterType = 'all' | 'wins' | 'losses';
+type TradeViewMode = 'card' | 'compact';
 
 const C = {
   grid: '#283243',
@@ -143,6 +159,7 @@ export default function App() {
   const [showForm, setShowForm] = useState(false);
   const [editTrade, setEditTrade] = useState<Trade | null>(null);
   const [manageTrade, setManageTrade] = useState<Trade | null>(null);
+  const [tradeViewMode, setTradeViewMode] = useState<TradeViewMode>('card');
   const [accountUser, setAccountUser] = useState<User | null>(null);
   const [isAuthReady, setIsAuthReady] = useState(false);
   const [authNotice, setAuthNotice] = useState('');
@@ -154,6 +171,15 @@ export default function App() {
 
   const formatCurrency = (value: number): string => currencyFormatter.format(roundTo2(value));
   const pnl = (value: number): string => `${value >= 0 ? '+' : ''}${formatCurrency(value)}`;
+  const compactNumberFormatter = useMemo(
+    () => new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }),
+    []
+  );
+  const currencySign = useMemo(
+    () => currencyFormatter.formatToParts(0).find((part) => part.type === 'currency')?.value ?? currency,
+    [currency, currencyFormatter]
+  );
+  const compactPortfolioValue = `${currencySign}${compactNumberFormatter.format(portfolioValue)}`;
 
   const applyAccountMetadata = (user: User) => {
     const metadata = user.user_metadata ?? {};
@@ -512,6 +538,10 @@ export default function App() {
         return acc;
       }, []);
   }, [trades]);
+  const pnlSparkline = useMemo(
+    () => lineData.slice(-18).map((item) => ({ date: item.date, pnl: item.provisional })),
+    [lineData]
+  );
 
   const monthData = useMemo(() => {
     const monthly = new Map<string, { month: string; realized: number; provisional: number }>();
@@ -549,27 +579,33 @@ export default function App() {
   return (
     <div className="min-h-screen bg-[var(--bg)] pb-28 text-[var(--text)] md:pb-8">
       <div className="mx-auto max-w-7xl space-y-4 px-4 py-4">
-        <header className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
-          <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
-            <div>
-              <h1 className="text-2xl font-bold">Trading Journal Pro</h1>
-              <p className="text-sm text-[var(--muted)]">
-                Faster journaling with clear partial exits, portfolio sizing, settings sync, and cleaner trade cards.
-              </p>
+        <header className="rounded-2xl border border-[var(--border)] bg-[linear-gradient(140deg,rgba(37,99,235,0.16),rgba(17,24,39,0.92)_35%,rgba(15,23,42,0.95))] p-3 shadow-[var(--shadow-card)]">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex min-w-0 items-center gap-2">
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-[color:rgba(148,163,184,0.25)] bg-[color:rgba(59,130,246,0.22)] text-[var(--accent)]">
+                <CandlestickChart size={16} />
+              </div>
+              <h1
+                className="truncate text-base font-semibold tracking-tight text-[var(--text-strong)] md:text-lg"
+                style={{ fontFamily: 'var(--font-display)' }}
+              >
+                Trading Journal Pro
+              </h1>
             </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-xs text-[var(--muted)]">
-                <p>Currency: {currency}</p>
-                <p>Portfolio: {formatCurrency(portfolioValue)}</p>
+            <div className="flex items-center gap-2">
+              <div className="rounded-lg border border-[var(--border)] bg-[color:rgba(15,23,42,0.72)] px-2.5 py-1.5 text-right">
+                <p className="text-[10px] uppercase tracking-[0.08em] text-[var(--muted)]">Portfolio</p>
+                <p className="text-sm font-semibold text-[var(--text-strong)]">{compactPortfolioValue}</p>
               </div>
               {accountUser ? (
                 <button
                   onClick={() => {
                     void signOut();
                   }}
-                  className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-xs"
+                  title="Sign Out"
+                  className="flex h-9 w-9 items-center justify-center rounded-full border border-[color:rgba(16,185,129,0.5)] bg-[linear-gradient(140deg,rgba(16,185,129,0.32),rgba(15,23,42,0.9))] text-[color:rgba(110,231,183,1)] shadow-[0_10px_20px_rgba(16,185,129,0.2)]"
                 >
-                  <LogOut size={13} className="mr-1 inline" /> Sign Out
+                  <LogOut size={14} />
                 </button>
               ) : (
                 <button
@@ -577,63 +613,78 @@ export default function App() {
                     void signInWithGoogle();
                   }}
                   disabled={isSigningInWithGoogle}
-                  className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-xs disabled:opacity-60"
+                  title="Sign In"
+                  className="flex h-9 min-w-[94px] items-center justify-center gap-1 rounded-full border border-[color:rgba(96,165,250,0.55)] bg-[linear-gradient(130deg,#38bdf8,#3b82f6)] px-3 text-xs font-semibold text-[#05101f] shadow-[0_10px_24px_rgba(59,130,246,0.3)] disabled:opacity-60"
                 >
-                  <LogIn size={13} className="mr-1 inline" /> {isSigningInWithGoogle ? 'Redirecting...' : 'Sign In'}
+                  <LogIn size={14} />
+                  <span>{isSigningInWithGoogle ? 'Wait...' : 'Sign In'}</span>
                 </button>
               )}
             </div>
           </div>
-          <button
-            onClick={() => {
-              setEditTrade(null);
-              setShowForm(true);
-            }}
-            className="mt-4 flex w-full items-center justify-center gap-2 rounded-lg bg-white px-4 py-3 text-base font-semibold text-black"
-          >
-            <Plus size={18} /> Add Trade
-          </button>
+
+          <div className="mt-2 max-w-sm rounded-lg border border-[var(--border)] bg-[color:rgba(15,23,42,0.7)] px-2.5 py-2 shadow-[var(--shadow-card)]">
+            <div className="flex items-center justify-between">
+              <p className="text-[10px] uppercase tracking-[0.08em] text-[var(--muted)]">Total P&L</p>
+              <p className={`text-base font-semibold ${pnlClass(summary.total)}`}>{pnl(summary.total)}</p>
+            </div>
+            {isSyncingSettings && isAuthReady && accountUser ? (
+              <p className="mt-1 text-[11px] text-[var(--accent)]">Syncing settings to account...</p>
+            ) : null}
+          </div>
         </header>
 
-        <section className="grid grid-cols-2 gap-3 lg:grid-cols-6">
-          <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-3">
-            <p className="text-xs text-[var(--muted)]">Realized</p>
-            <p className={`text-lg font-semibold ${pnlClass(summary.realized)}`}>{pnl(summary.realized)}</p>
+        <section className="grid grid-cols-2 gap-2 md:grid-cols-3 lg:grid-cols-6">
+          <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] px-2.5 py-2 shadow-[var(--shadow-card)]">
+            <p className="text-[11px] text-[var(--muted)]">Realized</p>
+            <p className={`text-base font-semibold ${pnlClass(summary.realized)}`}>{pnl(summary.realized)}</p>
           </div>
-          <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-3">
-            <p className="text-xs text-[var(--muted)]">Unrealized</p>
-            <p className={`text-lg font-semibold ${pnlClass(summary.unrealized)}`}>{pnl(summary.unrealized)}</p>
+          <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] px-2.5 py-2 shadow-[var(--shadow-card)]">
+            <p className="text-[11px] text-[var(--muted)]">Unrealized</p>
+            <p className={`text-base font-semibold ${pnlClass(summary.unrealized)}`}>{pnl(summary.unrealized)}</p>
           </div>
-          <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-3">
-            <p className="text-xs text-[var(--muted)]">Total</p>
-            <p className={`text-lg font-semibold ${pnlClass(summary.total)}`}>{pnl(summary.total)}</p>
+          <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] px-2.5 py-2 shadow-[var(--shadow-card)]">
+            <p className="text-[11px] text-[var(--muted)]">Total</p>
+            <p className={`text-base font-semibold ${pnlClass(summary.total)}`}>{pnl(summary.total)}</p>
           </div>
-          <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-3">
-            <p className="text-xs text-[var(--muted)]">Win Rate</p>
-            <p className="text-lg font-semibold">{summary.winRate.toFixed(1)}%</p>
-            <p className="text-xs text-[var(--muted)]">
+          <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] px-2.5 py-2 shadow-[var(--shadow-card)]">
+            <p className="text-[11px] text-[var(--muted)]">Win Rate</p>
+            <p className="text-base font-semibold">{summary.winRate.toFixed(1)}%</p>
+            <p className="text-[11px] text-[var(--muted)]">
               {summary.wins}W/{summary.losses}L
             </p>
           </div>
-          <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-3">
-            <p className="text-xs text-[var(--muted)]">Open Trades</p>
-            <p className="text-lg font-semibold text-[var(--accent)]">{summary.open}</p>
+          <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] px-2.5 py-2 shadow-[var(--shadow-card)]">
+            <p className="text-[11px] text-[var(--muted)]">Open Trades</p>
+            <p className="text-base font-semibold text-[var(--accent)]">{summary.open}</p>
           </div>
-          <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-3">
-            <p className="text-xs text-[var(--muted)]">Open Exposure</p>
-            <p className="text-lg font-semibold">{openExposure.percent.toFixed(1)}%</p>
-            <p className="text-xs text-[var(--muted)]">{formatCurrency(openExposure.value)}</p>
+          <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] px-2.5 py-2 shadow-[var(--shadow-card)]">
+            <div className="flex items-center justify-between">
+              <p className="text-[11px] text-[var(--muted)]">Exposure</p>
+              <p className="text-[11px] font-semibold">{openExposure.percent.toFixed(1)}%</p>
+            </div>
+            <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-[var(--surface-3)]">
+              <div
+                className="h-full rounded-full bg-[linear-gradient(90deg,var(--accent),#2dd4bf)]"
+                style={{ width: `${Math.min(openExposure.percent, 100)}%` }}
+              />
+            </div>
+            <p className="mt-1 text-[11px] text-[var(--muted)]">{formatCurrency(openExposure.value)}</p>
           </div>
         </section>
 
-        <section className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
-          <div className="mb-4 flex gap-2 overflow-auto">
+        <section className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-3 shadow-[var(--shadow-card)]">
+          <div className="mb-3 flex gap-1.5 overflow-auto pb-1">
             {tabs.map((tabItem) => (
               <button
                 key={tabItem.id}
                 onClick={() => setTab(tabItem.id)}
-                className={`rounded-lg px-3 py-2 text-sm ${
-                  tab === tabItem.id ? 'bg-[var(--surface-2)] text-[var(--accent)]' : 'text-[var(--muted)]'
+                className={`rounded-lg px-3 py-1.5 text-sm transition ${
+                  tab === tabItem.id
+                    ? 'bg-[var(--surface-strong)] text-[var(--accent)] shadow-[0_8px_18px_rgba(30,64,175,0.25)]'
+                    : tabItem.id === 'trades'
+                      ? 'bg-[color:rgba(30,41,59,0.7)] text-[var(--text)]'
+                      : 'text-[var(--muted)]'
                 }`}
               >
                 {tabItem.label}
@@ -643,11 +694,11 @@ export default function App() {
           </div>
 
           {tab === 'overview' && (
-            <div className="space-y-4">
+            <div className="space-y-2.5">
               {reminders.map((reminder) => (
                 <div
                   key={reminder.id}
-                  className="flex items-start justify-between rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-3"
+                  className="flex items-start justify-between rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-2.5 shadow-[var(--shadow-card)]"
                 >
                   <div>
                     <p className="text-sm font-semibold">
@@ -661,15 +712,15 @@ export default function App() {
                       completeReminder(reminder.kind);
                       setReminders(listActiveReminders());
                     }}
-                    className="rounded bg-[var(--accent)] px-2 py-1 text-xs font-semibold text-black"
+                    className="rounded-md bg-[var(--accent)] px-2 py-1 text-xs font-semibold text-black"
                   >
                     Done
                   </button>
                 </div>
               ))}
-              <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-3">
+              <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-2.5 shadow-[var(--shadow-card)]">
                 <p className="mb-2 text-xs uppercase text-[var(--muted)]">Cumulative Realized vs Provisional</p>
-                <ResponsiveContainer width="100%" height={260}>
+                <ResponsiveContainer width="100%" height={240}>
                   <LineChart data={lineData}>
                     <CartesianGrid stroke={C.grid} strokeDasharray="3 3" />
                     <XAxis dataKey="date" stroke={C.text} />
@@ -684,30 +735,30 @@ export default function App() {
           )}
 
           {tab === 'trades' && (
-            <div className="space-y-3">
+            <div className="space-y-2.5">
               <div className="grid gap-2 md:grid-cols-4">
                 <input
                   value={search}
                   onChange={(event) => setSearch(event.target.value)}
                   placeholder="Search symbol"
-                  className="rounded border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-sm"
+                  className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-2.5 py-2 text-sm"
                 />
                 <input
                   type="date"
                   value={from}
                   onChange={(event) => setFrom(event.target.value)}
-                  className="rounded border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-sm"
+                  className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-2.5 py-2 text-sm"
                 />
                 <input
                   type="date"
                   value={to}
                   onChange={(event) => setTo(event.target.value)}
-                  className="rounded border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-sm"
+                  className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-2.5 py-2 text-sm"
                 />
                 <select
                   value={flt}
                   onChange={(event) => setFlt(event.target.value as FilterType)}
-                  className="rounded border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-sm"
+                  className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-2.5 py-2 text-sm"
                 >
                   <option value="all">All P&amp;L</option>
                   <option value="wins">Winners</option>
@@ -715,55 +766,149 @@ export default function App() {
                 </select>
               </div>
 
-              <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-3">
+              <div className="grid gap-2 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-2.5 md:grid-cols-[minmax(0,1fr)_220px_auto] md:items-center">
                 <p className="text-sm text-[var(--muted)]">
-                  Showing {activeTrades.length} active trades • PF Value:{' '}
+                  <Wallet size={12} className="mr-1 inline" />
+                  Showing {activeTrades.length} active trades - PF Value{' '}
                   <span className="font-semibold text-[var(--text)]">{formatCurrency(portfolioValue)}</span>
                 </p>
+                <div className="hidden rounded-md border border-[var(--border)] bg-[var(--surface)] px-2 py-1 md:block">
+                  <p className="text-[10px] uppercase tracking-[0.06em] text-[var(--muted)]">P&amp;L Trend</p>
+                  <div className="h-9">
+                    {pnlSparkline.length > 1 ? (
+                      <ResponsiveContainer width="100%" height="100%">
+                        <LineChart data={pnlSparkline}>
+                          <Line
+                            dataKey="pnl"
+                            stroke={summary.total >= 0 ? 'var(--positive)' : 'var(--negative)'}
+                            strokeWidth={2}
+                            dot={false}
+                          />
+                        </LineChart>
+                      </ResponsiveContainer>
+                    ) : (
+                      <p className="pt-1 text-[11px] text-[var(--muted)]">Need more trades</p>
+                    )}
+                  </div>
+                </div>
                 <div className="flex flex-wrap items-center gap-2">
+                  <div className="inline-flex rounded-lg border border-[var(--border)] bg-[var(--surface)] p-0.5">
+                    <button
+                      onClick={() => setTradeViewMode('card')}
+                      className={`flex items-center gap-1 rounded-md px-2 py-1 text-xs ${
+                        tradeViewMode === 'card' ? 'bg-[var(--surface-3)] text-[var(--text)]' : 'text-[var(--muted)]'
+                      }`}
+                    >
+                      <LayoutGrid size={12} /> Card
+                    </button>
+                    <button
+                      onClick={() => setTradeViewMode('compact')}
+                      className={`flex items-center gap-1 rounded-md px-2 py-1 text-xs ${
+                        tradeViewMode === 'compact' ? 'bg-[var(--surface-3)] text-[var(--text)]' : 'text-[var(--muted)]'
+                      }`}
+                    >
+                      <List size={12} /> Compact
+                    </button>
+                  </div>
                   <button
                     onClick={() => {
                       void refreshOpenTradeMarks();
                     }}
                     disabled={isRefreshingMarks}
-                    className="rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm disabled:opacity-60"
+                    className="rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2.5 py-1.5 text-xs disabled:opacity-60"
                   >
-                    <RefreshCw size={14} className={`mr-1 inline ${isRefreshingMarks ? 'animate-spin' : ''}`} />
-                    {isRefreshingMarks ? 'Refreshing' : 'Refresh Marks'}
+                    <RefreshCw size={13} className={`mr-1 inline ${isRefreshingMarks ? 'animate-spin' : ''}`} />
+                    {isRefreshingMarks ? 'Refreshing' : 'Refresh'}
                   </button>
                   <button
                     onClick={() => exportTradesToCsv(trades)}
-                    className="rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm"
+                    className="rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2.5 py-1.5 text-xs"
                   >
-                    <Download size={14} className="mr-1 inline" /> Export
+                    <Download size={13} className="mr-1 inline" /> Export
                   </button>
                 </div>
               </div>
-
               {activeTrades.length === 0 ? (
-                <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-6 text-center text-sm text-[var(--muted)]">
+                <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-4 text-center text-sm text-[var(--muted)]">
                   No active trades match the current filters.
                 </div>
               ) : null}
 
-              <div className="grid gap-3 lg:grid-cols-2">
+              {tradeViewMode === 'compact' ? (
+                <div className="space-y-1.5">
+                  {activeTrades.map((trade) => {
+                    const remaining = getRemainingQuantity(trade);
+                    return (
+                      <article
+                        key={trade.id}
+                        className={`rounded-lg border border-[var(--border)] border-l-4 bg-[var(--surface-2)] px-2.5 py-2 shadow-[var(--shadow-card)] ${
+                          trade.totalPnl >= 0 ? 'border-l-[var(--positive)]' : 'border-l-[var(--negative)]'
+                        }`}
+                      >
+                        <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2">
+                          <p className="text-sm font-semibold text-[var(--text)]">{trade.symbol}</p>
+                          <p className="truncate text-[11px] text-[var(--muted)]">
+                            {trade.date} - {trade.direction.toUpperCase()} - Rem {remaining.toFixed(2)}
+                          </p>
+                          <p className={`text-xs font-semibold ${pnlClass(trade.totalPnl)}`}>{pnl(trade.totalPnl)}</p>
+                        </div>
+                        <div className="mt-1.5 flex flex-wrap items-center justify-between gap-1.5">
+                          <div className="flex items-center gap-1.5">
+                            <span className="rounded-full bg-[color:rgba(250,204,21,0.2)] px-2 py-0.5 text-[10px] font-medium text-[var(--accent)]">
+                              {trade.status}
+                            </span>
+                            <button
+                              onClick={() => setManageTrade(trade)}
+                              className="rounded-full bg-[color:rgba(96,165,250,0.18)] px-2 py-0.5 text-[10px] text-[color:rgba(125,211,252,1)]"
+                            >
+                              Partial / Close
+                            </button>
+                          </div>
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              onClick={() => {
+                                setEditTrade(trade);
+                                setShowForm(true);
+                              }}
+                              className="rounded border border-[var(--border)] p-1"
+                            >
+                              <Edit2 size={11} />
+                            </button>
+                            <button onClick={() => delTrade(trade.id)} className="rounded border border-[var(--border)] p-1">
+                              <Trash2 size={11} />
+                            </button>
+                          </div>
+                        </div>
+                      </article>
+                    );
+                  })}
+                </div>
+              ) : null}
+
+              <div className={tradeViewMode === 'compact' ? 'hidden' : 'grid gap-2 lg:grid-cols-2'}>
                 {activeTrades.map((trade) => {
                   const remaining = getRemainingQuantity(trade);
                   const positionValue = roundTo2(trade.entryPrice * trade.quantity);
                   const portfolioShare = portfolioValue > 0 ? roundTo2((positionValue / portfolioValue) * 100) : 0;
+                  const exposureWidth = Math.max(0, Math.min(portfolioShare, 100));
 
                   return (
-                    <article key={trade.id} className="rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-4">
+                    <article
+                      key={trade.id}
+                      className={`rounded-xl border border-[var(--border)] border-l-4 bg-[var(--surface-2)] p-3 shadow-[var(--shadow-card)] ${
+                        trade.totalPnl >= 0 ? 'border-l-[var(--positive)]' : 'border-l-[var(--negative)]'
+                      }`}
+                    >
                       <div className="flex flex-wrap items-start justify-between gap-2">
                         <div>
-                          <p className="text-lg font-semibold">{trade.symbol}</p>
-                          <p className="text-xs text-[var(--muted)]">
-                            {trade.date} • {trade.direction.toUpperCase()}
+                          <p className="text-base font-semibold">{trade.symbol}</p>
+                          <p className="text-[11px] text-[var(--muted)]">
+                            {trade.date} - {trade.direction.toUpperCase()}
                           </p>
                         </div>
                         <div className="flex flex-wrap items-center justify-end gap-2">
                           <span
-                            className={`rounded px-2 py-1 text-[10px] ${
+                            className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
                               trade.status === 'open'
                                 ? 'bg-[color:rgba(250,204,21,0.2)] text-[var(--accent)]'
                                 : 'bg-[color:rgba(34,197,94,0.2)] text-[var(--positive)]'
@@ -774,7 +919,7 @@ export default function App() {
                           {trade.status === 'open' ? (
                             <button
                               onClick={() => setManageTrade(trade)}
-                              className="rounded border border-[var(--border)] px-2 py-1 text-xs text-[var(--accent)]"
+                              className="rounded-full bg-[color:rgba(96,165,250,0.18)] px-2 py-0.5 text-[10px] text-[color:rgba(125,211,252,1)]"
                             >
                               Partial / Close
                             </button>
@@ -794,45 +939,58 @@ export default function App() {
                         </div>
                       </div>
 
-                      <div className="mt-3 grid grid-cols-2 gap-2 text-xs md:grid-cols-3">
-                        <div className="rounded border border-[var(--border)] bg-[var(--surface)] px-2 py-2">
+                      <div className="mt-2 grid grid-cols-2 gap-1.5 text-xs md:grid-cols-3">
+                        <div className="rounded border border-[var(--border)] bg-[var(--surface)] px-2 py-1.5">
                           <p className="text-[var(--muted)]">Entry</p>
                           <p>{formatCurrency(trade.entryPrice)}</p>
                         </div>
-                        <div className="rounded border border-[var(--border)] bg-[var(--surface)] px-2 py-2">
+                        <div className="rounded border border-[var(--border)] bg-[var(--surface)] px-2 py-1.5">
                           <p className="text-[var(--muted)]">Qty</p>
                           <p>{trade.quantity.toFixed(2)}</p>
                         </div>
-                        <div className="rounded border border-[var(--border)] bg-[var(--surface)] px-2 py-2">
+                        <div className="rounded border border-[var(--border)] bg-[var(--surface)] px-2 py-1.5">
                           <p className="text-[var(--muted)]">Remaining</p>
                           <p>{remaining.toFixed(2)}</p>
                         </div>
-                        <div className="rounded border border-[var(--border)] bg-[var(--surface)] px-2 py-2">
+                        <div className="rounded border border-[var(--border)] bg-[var(--surface)] px-2 py-1.5">
                           <p className="text-[var(--muted)]">Mark</p>
                           <p>{trade.markPrice != null ? formatCurrency(trade.markPrice) : '-'}</p>
                         </div>
-                        <div className="rounded border border-[var(--border)] bg-[var(--surface)] px-2 py-2">
+                        <div className="rounded border border-[var(--border)] bg-[var(--surface)] px-2 py-1.5">
                           <p className="text-[var(--muted)]">Position Value</p>
                           <p>{formatCurrency(positionValue)}</p>
                         </div>
-                        <div className="rounded border border-[var(--border)] bg-[var(--surface)] px-2 py-2">
+                        <div className="rounded border border-[var(--border)] bg-[var(--surface)] px-2 py-1.5">
                           <p className="text-[var(--muted)]">PF Share</p>
                           <p>{portfolioShare.toFixed(2)}%</p>
                         </div>
                       </div>
 
-                      <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
-                        <div className="rounded border border-[var(--border)] bg-[var(--surface)] px-3 py-2">
-                          <p className="text-xs text-[var(--muted)]">Realized</p>
+                      <div className="mt-2 rounded border border-[var(--border)] bg-[var(--surface)] px-2 py-1.5">
+                        <div className="flex items-center justify-between text-[11px] text-[var(--muted)]">
+                          <span>Exposure</span>
+                          <span>{portfolioShare.toFixed(2)}%</span>
+                        </div>
+                        <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-[var(--surface-3)]">
+                          <div
+                            className="h-full rounded-full bg-[linear-gradient(90deg,var(--accent),#2dd4bf)]"
+                            style={{ width: `${exposureWidth}%` }}
+                          />
+                        </div>
+                      </div>
+
+                      <div className="mt-2 grid grid-cols-2 gap-1.5 text-sm">
+                        <div className="rounded border border-[var(--border)] bg-[var(--surface)] px-2 py-1.5">
+                          <p className="text-[11px] text-[var(--muted)]">Realized</p>
                           <p className={pnlClass(trade.realizedPnl)}>{pnl(trade.realizedPnl)}</p>
                         </div>
-                        <div className="rounded border border-[var(--border)] bg-[var(--surface)] px-3 py-2">
-                          <p className="text-xs text-[var(--muted)]">Unrealized</p>
+                        <div className="rounded border border-[var(--border)] bg-[var(--surface)] px-2 py-1.5">
+                          <p className="text-[11px] text-[var(--muted)]">Unrealized</p>
                           <p className={pnlClass(trade.unrealizedPnl)}>{pnl(trade.unrealizedPnl)}</p>
                         </div>
                       </div>
 
-                      <div className="mt-2 flex items-center justify-between text-xs text-[var(--muted)]">
+                      <div className="mt-1.5 flex items-center justify-between text-[11px] text-[var(--muted)]">
                         <span>Total return: {trade.totalPnlPercent.toFixed(2)}%</span>
                         <span>Exit legs: {trade.exitLegs.length}</span>
                       </div>
@@ -850,24 +1008,24 @@ export default function App() {
                   value={search}
                   onChange={(event) => setSearch(event.target.value)}
                   placeholder="Search symbol"
-                  className="rounded border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-sm"
+                  className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-2.5 py-2 text-sm"
                 />
                 <input
                   type="date"
                   value={from}
                   onChange={(event) => setFrom(event.target.value)}
-                  className="rounded border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-sm"
+                  className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-2.5 py-2 text-sm"
                 />
                 <input
                   type="date"
                   value={to}
                   onChange={(event) => setTo(event.target.value)}
-                  className="rounded border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-sm"
+                  className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-2.5 py-2 text-sm"
                 />
                 <select
                   value={flt}
                   onChange={(event) => setFlt(event.target.value as FilterType)}
-                  className="rounded border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-sm"
+                  className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-2.5 py-2 text-sm"
                 >
                   <option value="all">All P&amp;L</option>
                   <option value="wins">Winners</option>
@@ -875,41 +1033,46 @@ export default function App() {
                 </select>
               </div>
 
-              <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-2.5">
                 <p className="text-sm text-[var(--muted)]">
                   Showing {historyTrades.length} closed trades (fully executed)
                 </p>
                 <button
                   onClick={() => exportTradesToCsv(historyTrades)}
-                  className="rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm"
+                  className="rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2.5 py-1.5 text-xs"
                 >
-                  <Download size={14} className="mr-1 inline" /> Export History
+                  <Download size={13} className="mr-1 inline" /> Export History
                 </button>
               </div>
 
               {historyTrades.length === 0 ? (
-                <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-6 text-center text-sm text-[var(--muted)]">
+                <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-4 text-center text-sm text-[var(--muted)]">
                   No closed trades in history for current filters.
                 </div>
               ) : null}
 
-              <div className="grid gap-3 lg:grid-cols-2">
+              <div className="grid gap-2 lg:grid-cols-2">
                 {historyTrades.map((trade) => {
                   const closedOn = trade.exitLegs[trade.exitLegs.length - 1]?.date ?? trade.date;
                   const positionValue = roundTo2(trade.entryPrice * trade.quantity);
                   const portfolioShare = portfolioValue > 0 ? roundTo2((positionValue / portfolioValue) * 100) : 0;
 
                   return (
-                    <article key={trade.id} className="rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-4">
+                    <article
+                      key={trade.id}
+                      className={`rounded-xl border border-[var(--border)] border-l-4 bg-[var(--surface-2)] p-3 shadow-[var(--shadow-card)] ${
+                        trade.realizedPnl >= 0 ? 'border-l-[var(--positive)]' : 'border-l-[var(--negative)]'
+                      }`}
+                    >
                       <div className="flex flex-wrap items-start justify-between gap-2">
                         <div>
-                          <p className="text-lg font-semibold">{trade.symbol}</p>
-                          <p className="text-xs text-[var(--muted)]">
-                            Opened {trade.date} • Closed {closedOn}
+                          <p className="text-base font-semibold">{trade.symbol}</p>
+                          <p className="text-[11px] text-[var(--muted)]">
+                            Opened {trade.date} - Closed {closedOn}
                           </p>
                         </div>
                         <div className="flex flex-wrap items-center justify-end gap-2">
-                          <span className="rounded bg-[color:rgba(34,197,94,0.2)] px-2 py-1 text-[10px] text-[var(--positive)]">
+                          <span className="rounded-full bg-[color:rgba(34,197,94,0.2)] px-2 py-0.5 text-[10px] text-[var(--positive)]">
                             closed
                           </span>
                           <button
@@ -927,40 +1090,40 @@ export default function App() {
                         </div>
                       </div>
 
-                      <div className="mt-3 grid grid-cols-2 gap-2 text-xs md:grid-cols-3">
-                        <div className="rounded border border-[var(--border)] bg-[var(--surface)] px-2 py-2">
+                      <div className="mt-2 grid grid-cols-2 gap-1.5 text-xs md:grid-cols-3">
+                        <div className="rounded border border-[var(--border)] bg-[var(--surface)] px-2 py-1.5">
                           <p className="text-[var(--muted)]">Entry</p>
                           <p>{formatCurrency(trade.entryPrice)}</p>
                         </div>
-                        <div className="rounded border border-[var(--border)] bg-[var(--surface)] px-2 py-2">
+                        <div className="rounded border border-[var(--border)] bg-[var(--surface)] px-2 py-1.5">
                           <p className="text-[var(--muted)]">Qty</p>
                           <p>{trade.quantity.toFixed(2)}</p>
                         </div>
-                        <div className="rounded border border-[var(--border)] bg-[var(--surface)] px-2 py-2">
+                        <div className="rounded border border-[var(--border)] bg-[var(--surface)] px-2 py-1.5">
                           <p className="text-[var(--muted)]">Exit Legs</p>
                           <p>{trade.exitLegs.length}</p>
                         </div>
-                        <div className="rounded border border-[var(--border)] bg-[var(--surface)] px-2 py-2">
+                        <div className="rounded border border-[var(--border)] bg-[var(--surface)] px-2 py-1.5">
                           <p className="text-[var(--muted)]">Direction</p>
                           <p>{trade.direction.toUpperCase()}</p>
                         </div>
-                        <div className="rounded border border-[var(--border)] bg-[var(--surface)] px-2 py-2">
+                        <div className="rounded border border-[var(--border)] bg-[var(--surface)] px-2 py-1.5">
                           <p className="text-[var(--muted)]">Position Value</p>
                           <p>{formatCurrency(positionValue)}</p>
                         </div>
-                        <div className="rounded border border-[var(--border)] bg-[var(--surface)] px-2 py-2">
+                        <div className="rounded border border-[var(--border)] bg-[var(--surface)] px-2 py-1.5">
                           <p className="text-[var(--muted)]">PF Share</p>
                           <p>{portfolioShare.toFixed(2)}%</p>
                         </div>
                       </div>
 
-                      <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
-                        <div className="rounded border border-[var(--border)] bg-[var(--surface)] px-3 py-2">
-                          <p className="text-xs text-[var(--muted)]">Realized</p>
+                      <div className="mt-2 grid grid-cols-2 gap-1.5 text-sm">
+                        <div className="rounded border border-[var(--border)] bg-[var(--surface)] px-2 py-1.5">
+                          <p className="text-[11px] text-[var(--muted)]">Realized</p>
                           <p className={pnlClass(trade.realizedPnl)}>{pnl(trade.realizedPnl)}</p>
                         </div>
-                        <div className="rounded border border-[var(--border)] bg-[var(--surface)] px-3 py-2">
-                          <p className="text-xs text-[var(--muted)]">Return</p>
+                        <div className="rounded border border-[var(--border)] bg-[var(--surface)] px-2 py-1.5">
+                          <p className="text-[11px] text-[var(--muted)]">Return</p>
                           <p className={pnlClass(trade.totalPnl)}>{trade.totalPnlPercent.toFixed(2)}%</p>
                         </div>
                       </div>
@@ -1165,18 +1328,33 @@ export default function App() {
         </section>
       </div>
 
-      <nav className="fixed bottom-0 left-0 right-0 z-40 border-t border-[var(--border)] bg-[var(--surface)] p-3 md:hidden">
-        <div className="grid grid-cols-6 gap-2">
+      <button
+        onClick={() => {
+          setEditTrade(null);
+          setShowForm(true);
+        }}
+        className="fixed bottom-24 right-4 z-50 flex h-12 items-center gap-2 rounded-full border border-[color:rgba(96,165,250,0.6)] bg-[linear-gradient(130deg,#22d3ee,#3b82f6)] px-4 text-sm font-semibold text-[#05101f] shadow-[0_14px_26px_rgba(37,99,235,0.35)] md:bottom-6"
+      >
+        <Plus size={17} />
+        Add Trade
+      </button>
+
+      <nav className="fixed bottom-0 left-0 right-0 z-40 border-t border-[var(--border)] bg-[color:rgba(7,11,20,0.95)] px-2 py-2 backdrop-blur md:hidden">
+        <div className="grid grid-cols-6 gap-1.5">
           {tabs.map((tabItem) => (
             <button
               key={tabItem.id}
               onClick={() => setTab(tabItem.id)}
-              className={`rounded-lg px-2 py-3 text-sm ${
-                tab === tabItem.id ? 'bg-[var(--surface-2)] text-[var(--accent)]' : 'text-[var(--muted)]'
+              className={`rounded-lg px-1.5 py-2 text-xs ${
+                tab === tabItem.id
+                  ? 'bg-[var(--surface-strong)] text-[var(--accent)] shadow-[0_8px_18px_rgba(30,64,175,0.25)]'
+                  : tabItem.id === 'trades'
+                    ? 'bg-[color:rgba(30,41,59,0.7)] text-[var(--text)]'
+                    : 'text-[var(--muted)]'
               }`}
             >
-              {tabItem.id === 'goals' ? <Target size={14} className="mr-1 inline" /> : null}
-              {tabItem.id === 'settings' ? <Settings size={14} className="mr-1 inline" /> : null}
+              {tabItem.id === 'goals' ? <Target size={13} className="mr-1 inline" /> : null}
+              {tabItem.id === 'settings' ? <Settings size={13} className="mr-1 inline" /> : null}
               {tabItem.label}
               {tabItem.badge ? ` ${tabItem.badge}` : ''}
             </button>
@@ -1241,3 +1419,4 @@ export default function App() {
     </div>
   );
 }
+

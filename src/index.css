@@ -1,18 +1,26 @@
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 :root {
   color-scheme: dark;
-  --bg: #060a12;
-  --surface: #0f1726;
-  --surface-2: #151f31;
-  --text: #e6edf7;
-  --muted: #8b9bb4;
-  --accent: #facc15;
+  --bg: #070b14;
+  --surface: #121b2d;
+  --surface-2: #18243a;
+  --surface-3: #24364f;
+  --surface-strong: #233752;
+  --text: #e7eefb;
+  --text-strong: #f5f8ff;
+  --muted: #91a3c0;
+  --accent: #7dd3fc;
   --positive: #34d399;
   --negative: #f87171;
-  --border: #253247;
+  --border: #2b3d58;
+  --shadow-card: 0 10px 24px rgba(2, 8, 24, 0.35);
+  --font-body: 'Manrope', 'Segoe UI', sans-serif;
+  --font-display: 'Space Grotesk', 'Segoe UI', sans-serif;
 }
 
 * {
@@ -27,7 +35,10 @@ body,
 
 body {
   margin: 0;
-  background: radial-gradient(1200px 500px at 80% -100px, #253247 0%, transparent 60%), var(--bg);
+  background:
+    radial-gradient(1000px 420px at 82% -100px, rgba(59, 130, 246, 0.28) 0%, transparent 62%),
+    radial-gradient(900px 420px at -10% 120%, rgba(45, 212, 191, 0.15) 0%, transparent 68%),
+    var(--bg);
   color: var(--text);
-  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Helvetica Neue, Arial, sans-serif;
+  font-family: var(--font-body);
 }
