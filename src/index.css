@@ -7,9 +7,9 @@
 :root {
   color-scheme: dark;
   --bg: #070b14;
-  --surface: #121b2d;
-  --surface-2: #18243a;
-  --surface-3: #24364f;
+  --surface: #121b2e;
+  --surface-2: #1f2d44;
+  --surface-3: #2a3d5b;
   --surface-strong: #233752;
   --text: #e7eefb;
   --text-strong: #f5f8ff;
@@ -17,7 +17,7 @@
   --accent: #7dd3fc;
   --positive: #34d399;
   --negative: #f87171;
-  --border: #2b3d58;
+  --border: rgba(126, 153, 189, 0.26);
   --shadow-card: 0 10px 24px rgba(2, 8, 24, 0.35);
   --font-body: 'Manrope', 'Segoe UI', sans-serif;
   --font-display: 'Space Grotesk', 'Segoe UI', sans-serif;
@@ -41,4 +41,60 @@ body {
     var(--bg);
   color: var(--text);
   font-family: var(--font-body);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
+}
+
+.ui-label {
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.ui-number {
+  font-variant-numeric: tabular-nums;
+}
+
+.toast-slide {
+  animation: toast-slide-in 180ms ease-out;
+}
+
+.modal-backdrop {
+  animation: fade-in 160ms ease-out;
+}
+
+.modal-panel {
+  animation: modal-up 180ms ease-out;
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes modal-up {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes toast-slide-in {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }

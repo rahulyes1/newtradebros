@@ -47,21 +47,21 @@ export default function GoalsPanel({ period, goals, progress, formatCurrency, on
   }, [goals]);
 
   return (
-    <div className="space-y-5">
-      <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
+    <div className="space-y-4">
+      <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-3 shadow-[var(--shadow-card)]">
         <h3 className="mb-2 text-lg font-semibold text-[var(--text)]">Goals for {period}</h3>
         <p className="text-sm text-[var(--muted)]">Set targets for realized performance and track provisional progress with unrealized P&L.</p>
-        <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
+        <div className="mt-3 grid grid-cols-1 gap-2.5 md:grid-cols-3">
           {(Object.keys(GOAL_LABELS) as GoalType[]).map((type) => (
-            <div key={type} className="space-y-2 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-3">
-              <label className="block text-sm text-[var(--muted)]">{GOAL_LABELS[type]}</label>
+            <div key={type} className="space-y-2 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-2.5">
+              <label className="ui-label block">{GOAL_LABELS[type]}</label>
               <input
                 type="number"
                 min="0"
                 step="0.01"
                 value={targets[type] ?? savedTargets[type] ?? ''}
                 onChange={(event) => setTargets((prev) => ({ ...prev, [type]: event.target.value }))}
-                className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-[var(--text)] outline-none focus:border-[var(--accent)]"
+                className="h-11 w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 text-[var(--text)] outline-none focus:border-[var(--accent)]"
                 placeholder="Set target"
               />
               <button
@@ -75,7 +75,7 @@ export default function GoalsPanel({ period, goals, progress, formatCurrency, on
                   }
                   onSaveGoal(type, target);
                 }}
-                className="w-full rounded-lg bg-[var(--accent)] px-3 py-2 text-sm font-medium text-black transition hover:brightness-110"
+                className="min-h-11 w-full rounded-lg bg-[var(--accent)] px-3 py-2 text-sm font-medium text-black transition hover:brightness-110"
               >
                 Save
               </button>
@@ -84,9 +84,9 @@ export default function GoalsPanel({ period, goals, progress, formatCurrency, on
         </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
         {progress.map((item) => (
-          <div key={item.goal.id} className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
+          <div key={item.goal.id} className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-3 shadow-[var(--shadow-card)]">
             <div className="mb-3 flex items-center justify-between">
               <h4 className="text-sm font-semibold text-[var(--text)]">{GOAL_LABELS[item.goal.type]}</h4>
               <button
@@ -104,7 +104,7 @@ export default function GoalsPanel({ period, goals, progress, formatCurrency, on
             <div className="mt-3 space-y-2">
               <div>
                 <div className="mb-1 flex items-center justify-between text-xs">
-                  <span className="text-[var(--muted)]">Realized</span>
+                  <span className="ui-label">Realized</span>
                   <span className={statusClass(item.status)}>{item.progressPercent.toFixed(0)}%</span>
                 </div>
                 <div className="h-2 rounded-full bg-[var(--surface-2)]">
@@ -113,7 +113,7 @@ export default function GoalsPanel({ period, goals, progress, formatCurrency, on
               </div>
               <div>
                 <div className="mb-1 flex items-center justify-between text-xs">
-                  <span className="text-[var(--muted)]">Provisional</span>
+                  <span className="ui-label">Provisional</span>
                   <span className={statusClass(item.statusWithUnrealized)}>{item.progressPercentWithUnrealized.toFixed(0)}%</span>
                 </div>
                 <div className="h-2 rounded-full bg-[var(--surface-2)]">
@@ -125,7 +125,7 @@ export default function GoalsPanel({ period, goals, progress, formatCurrency, on
         ))}
 
         {progress.length === 0 && (
-          <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-6 text-sm text-[var(--muted)]">
+          <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4 text-sm text-[var(--muted)]">
             No goals set for this month yet.
           </div>
         )}

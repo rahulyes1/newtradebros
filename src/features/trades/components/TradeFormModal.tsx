@@ -255,27 +255,27 @@ export default function TradeFormModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-      <div className="max-h-[92vh] w-full max-w-3xl overflow-y-auto rounded-2xl border border-[var(--border)] bg-[var(--surface)]">
-        <div className="flex items-center justify-between border-b border-[var(--border)] px-6 py-4">
+    <div className="modal-backdrop fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-3 sm:p-4">
+      <div className="modal-panel max-h-[92vh] w-full max-w-2xl overflow-y-auto rounded-2xl border border-[var(--border)] bg-[var(--surface)]">
+        <div className="flex items-center justify-between border-b border-[var(--border)] px-4 py-3">
           <h2 className="text-xl font-semibold text-[var(--text)]">{isEdit ? 'Edit Trade' : 'Add Trade'}</h2>
           <button
             type="button"
-            className="rounded-lg p-1 text-[var(--muted)] transition hover:bg-[var(--surface-2)] hover:text-[var(--text)]"
+            className="flex h-11 w-11 items-center justify-center rounded-lg text-[var(--muted)] transition hover:bg-[var(--surface-2)] hover:text-[var(--text)]"
             onClick={onClose}
           >
             <X size={20} />
           </button>
         </div>
-        <form onSubmit={submit} className="space-y-4 px-6 py-5">
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+        <form onSubmit={submit} className="space-y-3 px-4 py-4">
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
             <label className="space-y-1 text-sm">
               <span className="text-[var(--muted)]">Date</span>
               <input
                 type="date"
                 value={state.date}
                 onChange={(event) => setState((prev) => ({ ...prev, date: event.target.value }))}
-                className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-[var(--text)] outline-none focus:border-[var(--accent)]"
+                className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface-2)] h-11 px-3 text-[var(--text)] outline-none focus:border-[var(--accent)]"
                 required
               />
             </label>
@@ -285,7 +285,7 @@ export default function TradeFormModal({
                 type="text"
                 value={state.symbol}
                 onChange={(event) => setState((prev) => ({ ...prev, symbol: event.target.value.toUpperCase() }))}
-                className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-[var(--text)] outline-none focus:border-[var(--accent)]"
+                className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface-2)] h-11 px-3 text-[var(--text)] outline-none focus:border-[var(--accent)]"
                 placeholder="AAPL"
                 required
               />
@@ -295,7 +295,7 @@ export default function TradeFormModal({
               <select
                 value={state.direction}
                 onChange={(event) => setState((prev) => ({ ...prev, direction: event.target.value as TradeDirection }))}
-                className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-[var(--text)] outline-none focus:border-[var(--accent)]"
+                className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface-2)] h-11 px-3 text-[var(--text)] outline-none focus:border-[var(--accent)]"
               >
                 <option value="long">Long</option>
                 <option value="short">Short</option>
@@ -309,7 +309,7 @@ export default function TradeFormModal({
                 step="0.01"
                 value={state.quantity}
                 onChange={(event) => setState((prev) => ({ ...prev, quantity: event.target.value }))}
-                className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-[var(--text)] outline-none focus:border-[var(--accent)]"
+                className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface-2)] h-11 px-3 text-[var(--text)] outline-none focus:border-[var(--accent)]"
                 required
               />
             </label>
@@ -321,7 +321,7 @@ export default function TradeFormModal({
                 step="0.01"
                 value={state.entryPrice}
                 onChange={(event) => setState((prev) => ({ ...prev, entryPrice: event.target.value }))}
-                className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-[var(--text)] outline-none focus:border-[var(--accent)]"
+                className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface-2)] h-11 px-3 text-[var(--text)] outline-none focus:border-[var(--accent)]"
                 required
               />
             </label>
@@ -333,7 +333,7 @@ export default function TradeFormModal({
                 step="0.01"
                 value={state.markPrice}
                 onChange={(event) => setState((prev) => ({ ...prev, markPrice: event.target.value }))}
-                className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-[var(--text)] outline-none focus:border-[var(--accent)]"
+                className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface-2)] h-11 px-3 text-[var(--text)] outline-none focus:border-[var(--accent)]"
                 placeholder="Set for unrealized P&L"
               />
             </label>
@@ -342,7 +342,7 @@ export default function TradeFormModal({
               <select
                 value={state.setupPreset}
                 onChange={(event) => setState((prev) => ({ ...prev, setupPreset: event.target.value }))}
-                className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-[var(--text)] outline-none focus:border-[var(--accent)]"
+                className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface-2)] h-11 px-3 text-[var(--text)] outline-none focus:border-[var(--accent)]"
               >
                 <option value="">Select setup (optional)</option>
                 {STRATEGY_PRESETS.map((strategy) => (
@@ -358,7 +358,7 @@ export default function TradeFormModal({
               <select
                 value={state.emotion}
                 onChange={(event) => setState((prev) => ({ ...prev, emotion: event.target.value }))}
-                className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-[var(--text)] outline-none focus:border-[var(--accent)]"
+                className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface-2)] h-11 px-3 text-[var(--text)] outline-none focus:border-[var(--accent)]"
               >
                 <option value="confident">Confident</option>
                 <option value="neutral">Neutral</option>
@@ -374,12 +374,12 @@ export default function TradeFormModal({
                   type="text"
                   value={state.setupCustom}
                   onChange={(event) => setState((prev) => ({ ...prev, setupCustom: event.target.value }))}
-                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-[var(--text)] outline-none focus:border-[var(--accent)]"
+                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface-2)] h-11 px-3 text-[var(--text)] outline-none focus:border-[var(--accent)]"
                   placeholder="Describe your setup"
                 />
               </label>
             )}
-            <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-3 text-sm md:col-span-2">
+            <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-2.5 text-sm md:col-span-2">
               <p className="text-[var(--muted)]">Position Size Preview</p>
               <p className="font-semibold text-[var(--text)]">
                 {positionInfo.isReady ? `${positionInfo.value.toFixed(2)} ${currency}` : `Enter entry and qty to preview`}
@@ -393,19 +393,19 @@ export default function TradeFormModal({
           </div>
 
           {!isEdit && (
-            <div className="rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-4">
+            <div className="rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-3">
               <h3 className="mb-2 text-sm font-semibold text-[var(--text)]">Optional Immediate Exit Leg</h3>
               <p className="mb-3 text-xs text-[var(--muted)]">
                 Leave this blank to create an open trade now and close it later.
               </p>
-              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+              <div className="grid grid-cols-1 gap-2.5 md:grid-cols-2">
                 <label className="space-y-1 text-sm">
                   <span className="text-[var(--muted)]">Exit Date</span>
                   <input
                     type="date"
                     value={state.initialExitDate}
                     onChange={(event) => setState((prev) => ({ ...prev, initialExitDate: event.target.value }))}
-                    className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-[var(--text)] outline-none focus:border-[var(--accent)]"
+                    className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] h-11 px-3 text-[var(--text)] outline-none focus:border-[var(--accent)]"
                   />
                 </label>
                 <label className="space-y-1 text-sm">
@@ -416,7 +416,7 @@ export default function TradeFormModal({
                     step="0.01"
                     value={state.initialExitPrice}
                     onChange={(event) => setState((prev) => ({ ...prev, initialExitPrice: event.target.value }))}
-                    className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-[var(--text)] outline-none focus:border-[var(--accent)]"
+                    className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] h-11 px-3 text-[var(--text)] outline-none focus:border-[var(--accent)]"
                     placeholder="Optional"
                   />
                 </label>
@@ -428,7 +428,7 @@ export default function TradeFormModal({
                     step="0.01"
                     value={state.initialExitQuantity}
                     onChange={(event) => setState((prev) => ({ ...prev, initialExitQuantity: event.target.value }))}
-                    className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-[var(--text)] outline-none focus:border-[var(--accent)]"
+                    className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] h-11 px-3 text-[var(--text)] outline-none focus:border-[var(--accent)]"
                     placeholder="Optional"
                   />
                 </label>
@@ -440,7 +440,7 @@ export default function TradeFormModal({
                     step="0.01"
                     value={state.initialExitFees}
                     onChange={(event) => setState((prev) => ({ ...prev, initialExitFees: event.target.value }))}
-                    className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-[var(--text)] outline-none focus:border-[var(--accent)]"
+                    className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] h-11 px-3 text-[var(--text)] outline-none focus:border-[var(--accent)]"
                     placeholder="0.00"
                   />
                 </label>
@@ -451,7 +451,7 @@ export default function TradeFormModal({
                   type="text"
                   value={state.initialExitNote}
                   onChange={(event) => setState((prev) => ({ ...prev, initialExitNote: event.target.value }))}
-                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-[var(--text)] outline-none focus:border-[var(--accent)]"
+                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] h-11 px-3 text-[var(--text)] outline-none focus:border-[var(--accent)]"
                   placeholder="Optional note"
                 />
               </label>
@@ -473,13 +473,13 @@ export default function TradeFormModal({
             <button
               type="button"
               onClick={onClose}
-              className="rounded-lg border border-[var(--border)] px-4 py-2 text-sm text-[var(--text)] transition hover:bg-[var(--surface-2)]"
+              className="min-h-11 rounded-lg border border-[var(--border)] px-4 py-2 text-sm text-[var(--text)] transition hover:bg-[var(--surface-2)]"
             >
               Cancel
             </button>
             <button
               type="submit"
-              className="rounded-lg bg-[var(--accent)] px-4 py-2 text-sm font-medium text-black transition hover:brightness-110"
+              className="min-h-11 rounded-lg bg-[var(--accent)] px-4 py-2 text-sm font-medium text-black transition hover:brightness-110"
             >
               {isEdit ? 'Update Trade' : 'Save Trade'}
             </button>
@@ -489,3 +489,4 @@ export default function TradeFormModal({
     </div>
   );
 }
+

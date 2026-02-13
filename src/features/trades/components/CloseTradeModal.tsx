@@ -109,21 +109,21 @@ export default function CloseTradeModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-      <div className="max-h-[92vh] w-full max-w-2xl overflow-y-auto rounded-2xl border border-[var(--border)] bg-[var(--surface)]">
-        <div className="flex items-center justify-between border-b border-[var(--border)] px-6 py-4">
+    <div className="modal-backdrop fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-3 sm:p-4">
+      <div className="modal-panel max-h-[92vh] w-full max-w-xl overflow-y-auto rounded-2xl border border-[var(--border)] bg-[var(--surface)]">
+        <div className="flex items-center justify-between border-b border-[var(--border)] px-4 py-3">
           <h2 className="text-xl font-semibold text-[var(--text)]">Manage Open Trade</h2>
           <button
             type="button"
-            className="rounded-lg p-1 text-[var(--muted)] transition hover:bg-[var(--surface-2)] hover:text-[var(--text)]"
+            className="flex h-11 w-11 items-center justify-center rounded-lg text-[var(--muted)] transition hover:bg-[var(--surface-2)] hover:text-[var(--text)]"
             onClick={onClose}
           >
             <X size={20} />
           </button>
         </div>
 
-        <div className="space-y-4 px-6 py-5">
-          <div className="rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-4 text-sm">
+        <div className="space-y-3 px-4 py-4">
+          <div className="rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-3 text-sm">
             <p className="font-semibold text-[var(--text)]">
               {trade.symbol} ({trade.direction.toUpperCase()})
             </p>
@@ -140,7 +140,7 @@ export default function CloseTradeModal({
             )}
           </div>
 
-          <div className="rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-4">
+          <div className="rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-3">
             <h3 className="mb-2 text-sm font-semibold text-[var(--text)]">Manual Mark Price</h3>
             <div className="flex flex-col gap-2 sm:flex-row">
               <input
@@ -149,20 +149,20 @@ export default function CloseTradeModal({
                 step="0.01"
                 value={markPrice}
                 onChange={(event) => setMarkPrice(event.target.value)}
-                className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-[var(--text)] outline-none focus:border-[var(--accent)]"
+                className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] h-11 px-3 text-[var(--text)] outline-none focus:border-[var(--accent)]"
                 placeholder={`Leave blank to clear (${currency})`}
               />
               <button
                 type="button"
                 onClick={saveMarkPrice}
-                className="rounded-lg bg-[var(--accent)] px-4 py-2 text-sm font-medium text-black transition hover:brightness-110"
+                className="min-h-11 rounded-lg bg-[var(--accent)] px-4 py-2 text-sm font-medium text-black transition hover:brightness-110"
               >
                 Save Mark
               </button>
             </div>
           </div>
 
-          <form onSubmit={confirmExit} className="space-y-3 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-4">
+          <form onSubmit={confirmExit} className="space-y-3 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-3">
             <h3 className="text-sm font-semibold text-[var(--text)]">Exit Builder</h3>
             <div className="grid grid-cols-2 gap-2">
               <button
@@ -173,7 +173,7 @@ export default function CloseTradeModal({
                     setExitQty(remainingQty.toFixed(2));
                   }
                 }}
-                className={`rounded-lg border px-3 py-2 text-sm ${
+                className={`min-h-11 rounded-lg border px-3 py-2 text-sm ${
                   exitMode === 'partial'
                     ? 'border-[var(--accent)] bg-[color:rgba(250,204,21,0.15)] text-[var(--text)]'
                     : 'border-[var(--border)] text-[var(--muted)]'
@@ -187,7 +187,7 @@ export default function CloseTradeModal({
                   setExitMode('full');
                   setExitQty(remainingQty.toFixed(2));
                 }}
-                className={`rounded-lg border px-3 py-2 text-sm ${
+                className={`min-h-11 rounded-lg border px-3 py-2 text-sm ${
                   exitMode === 'full'
                     ? 'border-[var(--positive)] bg-[color:rgba(52,211,153,0.15)] text-[var(--text)]'
                     : 'border-[var(--border)] text-[var(--muted)]'
@@ -200,28 +200,28 @@ export default function CloseTradeModal({
               <button
                 type="button"
                 onClick={() => setQtyFromRatio(0.25)}
-                className="rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2 py-1 text-xs text-[var(--muted)]"
+                className="min-h-11 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2 py-1 text-xs text-[var(--muted)]"
               >
                 25%
               </button>
               <button
                 type="button"
                 onClick={() => setQtyFromRatio(0.5)}
-                className="rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2 py-1 text-xs text-[var(--muted)]"
+                className="min-h-11 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2 py-1 text-xs text-[var(--muted)]"
               >
                 50%
               </button>
               <button
                 type="button"
                 onClick={() => setQtyFromRatio(0.75)}
-                className="rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2 py-1 text-xs text-[var(--muted)]"
+                className="min-h-11 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2 py-1 text-xs text-[var(--muted)]"
               >
                 75%
               </button>
               <button
                 type="button"
                 onClick={() => setQtyFromRatio(1)}
-                className="rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2 py-1 text-xs text-[var(--muted)]"
+                className="min-h-11 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2 py-1 text-xs text-[var(--muted)]"
               >
                 100%
               </button>
@@ -233,7 +233,7 @@ export default function CloseTradeModal({
                   type="date"
                   value={exitDate}
                   onChange={(event) => setExitDate(event.target.value)}
-                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-[var(--text)] outline-none focus:border-[var(--accent)]"
+                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] h-11 px-3 text-[var(--text)] outline-none focus:border-[var(--accent)]"
                   required
                 />
               </label>
@@ -245,7 +245,7 @@ export default function CloseTradeModal({
                   step="0.01"
                   value={exitPrice}
                   onChange={(event) => setExitPrice(event.target.value)}
-                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-[var(--text)] outline-none focus:border-[var(--accent)]"
+                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] h-11 px-3 text-[var(--text)] outline-none focus:border-[var(--accent)]"
                   required
                 />
               </label>
@@ -258,7 +258,7 @@ export default function CloseTradeModal({
                   step="0.01"
                   value={exitQty}
                   onChange={(event) => setExitQty(event.target.value)}
-                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-[var(--text)] outline-none focus:border-[var(--accent)]"
+                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] h-11 px-3 text-[var(--text)] outline-none focus:border-[var(--accent)]"
                   required
                 />
               </label>
@@ -270,7 +270,7 @@ export default function CloseTradeModal({
                   step="0.01"
                   value={fees}
                   onChange={(event) => setFees(event.target.value)}
-                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-[var(--text)] outline-none focus:border-[var(--accent)]"
+                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] h-11 px-3 text-[var(--text)] outline-none focus:border-[var(--accent)]"
                 />
               </label>
             </div>
@@ -294,19 +294,19 @@ export default function CloseTradeModal({
                 type="text"
                 value={note}
                 onChange={(event) => setNote(event.target.value)}
-                className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-[var(--text)] outline-none focus:border-[var(--accent)]"
+                className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] h-11 px-3 text-[var(--text)] outline-none focus:border-[var(--accent)]"
               />
             </label>
             <button
               type="submit"
-              className="w-full rounded-lg bg-[var(--positive)] px-4 py-2 text-sm font-semibold text-black transition hover:brightness-110"
+              className="min-h-11 w-full rounded-lg bg-[var(--positive)] px-4 py-2 text-sm font-semibold text-black transition hover:brightness-110"
             >
               {exitMode === 'full' ? 'Confirm Full Close' : 'Confirm Partial Exit'}
             </button>
           </form>
 
           {trade.exitLegs.length > 0 && (
-            <div className="rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-4">
+            <div className="rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-3">
               <h3 className="mb-2 text-sm font-semibold text-[var(--text)]">Existing Exit Legs</h3>
               <div className="space-y-2 text-sm">
                 {trade.exitLegs.map((leg) => (
@@ -325,3 +325,4 @@ export default function CloseTradeModal({
     </div>
   );
 }
+
