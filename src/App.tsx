@@ -43,11 +43,13 @@ import {
   DEFAULT_CURRENCY,
   isCurrencyCode,
   MAJOR_CURRENCIES,
+  PORTFOLIO_VALUE_STORAGE_KEY,
   type CurrencyCode,
 } from './shared/config/tradingOptions';
 import TradeFormModal, { type TradeFormPayload } from './features/trades/components/TradeFormModal';
 import CloseTradeModal from './features/trades/components/CloseTradeModal';
 import GoalsPanel from './features/goals/components/GoalsPanel';
+import OnboardingWizard from './features/onboarding/components/OnboardingWizard';
 import { supabase } from './supabaseClient';
 
 type Tab = 'trades' | 'history' | 'overview' | 'analytics' | 'goals' | 'settings';
@@ -78,10 +80,13 @@ const dateDisplayFormatter = new Intl.DateTimeFormat(undefined, { month: 'short'
 
 const periodNow = () => new Date().toISOString().slice(0, 7);
 const pnlClass = (v: number) => (v >= 0 ? 'text-[var(--positive)]' : 'text-[var(--negative)]');
-const PORTFOLIO_VALUE_STORAGE_KEY = 'settings.portfolioValue';
 const CONFIRM_DELETE_STORAGE_KEY = 'settings.confirmDelete';
 const AUTO_REFRESH_MARKS_STORAGE_KEY = 'settings.autoRefreshMarks';
 const ANALYTICS_UNREALIZED_STORAGE_KEY = 'settings.analytics.includeUnrealized';
+const HAS_SKIPPED_PORTFOLIO_VALUE_STORAGE_KEY = 'hasSkippedPortfolioValue';
+const DISMISSED_PORTFOLIO_BANNER_STORAGE_KEY = 'dismissedPortfolioBanner';
+const DISMISSED_AFTER_FIVE_TRADES_STORAGE_KEY = 'dismissedAfter5Trades';
+const PORTFOLIO_NUDGE_DISMISS_DATE_STORAGE_KEY = 'portfolioNudgeDismissDate';
 
 function getInitialCurrency(): CurrencyCode {
   try {
@@ -182,6 +187,159 @@ function formatTradeDate(dateIso: string): string {
   return dateDisplayFormatter.format(date);
 }
 
+interface PortfolioValueBannerProps {
+  onSetValue: () => void;
+  onDismiss: () => void;
+}
+
+function PortfolioValueBanner({ onSetValue, onDismiss }: PortfolioValueBannerProps) {
+  return (
+    <div className="mb-4 rounded-lg border border-[var(--accent)] bg-[color:rgba(125,211,252,0.12)] p-4">
+      <div className="flex items-start gap-3">
+        <div className="text-2xl" aria-hidden="true">
+          📊
+        </div>
+        <div className="flex-1">
+          <h3 className="mb-1 font-semibold">Unlock Advanced Metrics</h3>
+          <p className="mb-3 text-sm text-[var(--muted)]">
+            Set your portfolio value to see returns as %, position sizing, and risk management insights.
+          </p>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={onSetValue}
+              className="min-h-11 rounded-lg bg-[var(--accent)] px-4 py-2 text-sm font-semibold text-black"
+            >
+              Set Portfolio Value
+            </button>
+            <button
+              type="button"
+              onClick={onDismiss}
+              className="min-h-11 rounded-lg border border-[var(--border)] px-4 py-2 text-sm"
+            >
+              Dismiss
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+interface PortfolioValueNudgeModalProps {
+  currentPnL: number;
+  currency: CurrencyCode;
+  formatCurrency: (value: number) => string;
+  onSet: (value: number) => void;
+  onDismiss: () => void;
+}
+
+function PortfolioValueNudgeModal({
+  currentPnL,
+  currency,
+  formatCurrency,
+  onSet,
+  onDismiss,
+}: PortfolioValueNudgeModalProps) {
+  const [inputValue, setInputValue] = useState('');
+
+  const presets = [10000, 50000, 100000, 500000];
+
+  const currencySymbol = useMemo(
+    () =>
+      new Intl.NumberFormat('en', {
+        style: 'currency',
+        currency,
+      })
+        .formatToParts(0)
+        .find((part) => part.type === 'currency')?.value || currency,
+    [currency]
+  );
+
+  const handleSave = () => {
+    const value = Number.parseFloat(inputValue);
+    if (value > 0) {
+      onSet(roundTo2(value));
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+      <div className="w-full max-w-md rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-6 shadow-[var(--shadow-card)]">
+        <div className="mb-4 text-center text-4xl" aria-hidden="true">
+          📈
+        </div>
+        <h2 className="mb-2 text-center text-xl font-bold">You're Making Progress!</h2>
+        <p className="mb-4 text-center text-sm text-[var(--muted)]">
+          You've logged 5 trades. Ready to unlock advanced insights?
+        </p>
+
+        <div className="mb-4 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-4">
+          <p className="mb-2 text-sm font-semibold">Set your portfolio value to see:</p>
+          <ul className="space-y-1 text-sm text-[var(--muted)]">
+            <li>• Your actual % returns</li>
+            <li className="flex items-center gap-2">
+              <span>Currently: {formatCurrency(currentPnL)} = </span>
+              <span className="rounded bg-[var(--accent)]/20 px-2 py-0.5 text-xs text-[var(--accent)]">?%</span>
+            </li>
+            <li>• Position sizing recommendations</li>
+            <li>• Risk management insights</li>
+          </ul>
+        </div>
+
+        <input
+          type="number"
+          min="0"
+          step="0.01"
+          value={inputValue}
+          onChange={(event) => setInputValue(event.target.value)}
+          placeholder={`Portfolio value (${currencySymbol})`}
+          className="mb-3 h-11 w-full rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-3 text-sm"
+        />
+
+        <div className="mb-4">
+          <div className="mb-2 text-xs text-[var(--muted)]">Quick presets:</div>
+          <div className="grid grid-cols-4 gap-2">
+            {presets.map((value) => (
+              <button
+                key={value}
+                type="button"
+                onClick={() => setInputValue(String(value))}
+                className="min-h-10 rounded-lg border border-[var(--border)] px-2 py-1.5 text-xs hover:border-[var(--accent)]"
+              >
+                {currencySymbol}
+                {value >= 1000000
+                  ? `${(value / 1000000).toFixed(0)}M`
+                  : value >= 100000
+                    ? `${(value / 100000).toFixed(0)}L`
+                    : `${(value / 1000).toFixed(0)}K`}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={onDismiss}
+            className="min-h-11 flex-1 rounded-lg border border-[var(--border)] px-4 py-2 text-sm"
+          >
+            Maybe Later
+          </button>
+          <button
+            type="button"
+            onClick={handleSave}
+            disabled={!inputValue || Number.parseFloat(inputValue) <= 0}
+            className="min-h-11 flex-1 rounded-lg bg-[var(--accent)] px-4 py-2 text-sm font-semibold text-black disabled:opacity-50"
+          >
+            Set Portfolio Value
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const tradeRepo = useMemo(() => new LocalTradeRepository(), []);
   const goalRepo = useMemo(() => new LocalGoalRepository(), []);
@@ -194,6 +352,16 @@ export default function App() {
   const [needsCurrencyOnboarding, setNeedsCurrencyOnboarding] = useState(() => !hasSavedCurrencyPreference());
   const [portfolioValue, setPortfolioValue] = useState<number>(() => getInitialPortfolioValue());
   const [portfolioValueInput, setPortfolioValueInput] = useState<string>(() => getInitialPortfolioValue().toFixed(2));
+  const [hasSkippedPortfolioValue, setHasSkippedPortfolioValue] = useState<boolean>(() =>
+    getInitialBoolean(HAS_SKIPPED_PORTFOLIO_VALUE_STORAGE_KEY, false)
+  );
+  const [dismissedPortfolioBanner, setDismissedPortfolioBanner] = useState<boolean>(() =>
+    getInitialBoolean(DISMISSED_PORTFOLIO_BANNER_STORAGE_KEY, false)
+  );
+  const [dismissedAfter5Trades, setDismissedAfter5Trades] = useState<boolean>(() =>
+    getInitialBoolean(DISMISSED_AFTER_FIVE_TRADES_STORAGE_KEY, false)
+  );
+  const [showPortfolioNudgeModal, setShowPortfolioNudgeModal] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<boolean>(() => getInitialBoolean(CONFIRM_DELETE_STORAGE_KEY, true));
   const [autoRefreshMarks, setAutoRefreshMarks] = useState<boolean>(() => getInitialBoolean(AUTO_REFRESH_MARKS_STORAGE_KEY, false));
   const [tab, setTab] = useState<Tab>('trades');
@@ -271,6 +439,7 @@ export default function App() {
       const rounded = roundTo2(accountPortfolioValue);
       setPortfolioValue(rounded);
       setPortfolioValueInput(rounded.toFixed(2));
+      setHasSkippedPortfolioValue(false);
     }
 
     const accountConfirmDelete = parseBoolean(metadata.confirm_delete);
@@ -339,20 +508,26 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (needsCurrencyOnboarding) {
+      return;
+    }
     try {
       localStorage.setItem(CURRENCY_STORAGE_KEY, currency);
     } catch {
       // Ignore localStorage write errors.
     }
-  }, [currency]);
+  }, [currency, needsCurrencyOnboarding]);
 
   useEffect(() => {
+    if (needsCurrencyOnboarding) {
+      return;
+    }
     try {
       localStorage.setItem(PORTFOLIO_VALUE_STORAGE_KEY, String(portfolioValue));
     } catch {
       // Ignore localStorage write errors.
     }
-  }, [portfolioValue]);
+  }, [portfolioValue, needsCurrencyOnboarding]);
 
   useEffect(() => {
     try {
@@ -377,6 +552,69 @@ export default function App() {
       // Ignore localStorage write errors.
     }
   }, [useUnrealized]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(HAS_SKIPPED_PORTFOLIO_VALUE_STORAGE_KEY, String(hasSkippedPortfolioValue));
+    } catch {
+      // Ignore localStorage write errors.
+    }
+  }, [hasSkippedPortfolioValue]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(DISMISSED_PORTFOLIO_BANNER_STORAGE_KEY, String(dismissedPortfolioBanner));
+    } catch {
+      // Ignore localStorage write errors.
+    }
+  }, [dismissedPortfolioBanner]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(DISMISSED_AFTER_FIVE_TRADES_STORAGE_KEY, String(dismissedAfter5Trades));
+    } catch {
+      // Ignore localStorage write errors.
+    }
+  }, [dismissedAfter5Trades]);
+
+  useEffect(() => {
+    if (portfolioValue > 0) {
+      setHasSkippedPortfolioValue(false);
+      setShowPortfolioNudgeModal(false);
+    }
+  }, [portfolioValue]);
+
+  useEffect(() => {
+    try {
+      const lastDismissDateRaw = localStorage.getItem(PORTFOLIO_NUDGE_DISMISS_DATE_STORAGE_KEY);
+      const lastDismissDate = lastDismissDateRaw ? Number.parseInt(lastDismissDateRaw, 10) : Number.NaN;
+      if (Number.isFinite(lastDismissDate)) {
+        const daysSince = (Date.now() - lastDismissDate) / (1000 * 60 * 60 * 24);
+        if (daysSince > 30) {
+          setDismissedPortfolioBanner(false);
+          setDismissedAfter5Trades(false);
+        }
+      }
+    } catch {
+      // Ignore localStorage read errors.
+    }
+
+    if (trades.length % 10 === 0 && trades.length > 5) {
+      setDismissedPortfolioBanner(false);
+      setDismissedAfter5Trades(false);
+    }
+  }, [trades.length]);
+
+  useEffect(() => {
+    if (!dismissedPortfolioBanner && !dismissedAfter5Trades) {
+      return;
+    }
+    try {
+      localStorage.setItem(PORTFOLIO_NUDGE_DISMISS_DATE_STORAGE_KEY, Date.now().toString());
+    } catch {
+      // Ignore localStorage write errors.
+    }
+  }, [dismissedAfter5Trades, dismissedPortfolioBanner]);
 
   useEffect(() => {
     if (!accountUser || !isAuthReady) {
@@ -425,11 +663,21 @@ export default function App() {
   }, [accountUser]);
 
   const submitTrade = (payload: TradeFormPayload) => {
+    const isCreate = payload.mode === 'create';
     const next = payload.mode === 'create'
       ? tradeRepo.createOpenTrade(payload.data)
       : payload.tradeId
         ? tradeRepo.updateTrade(payload.tradeId, payload.data)
         : trades;
+
+    if (isCreate) {
+      const newTradesLength = next.length;
+      const isNudgeTradeMilestone = newTradesLength >= 5 && (newTradesLength - 5) % 10 === 0;
+      if (isNudgeTradeMilestone && hasSkippedPortfolioValue && portfolioValue === 0 && !dismissedAfter5Trades) {
+        setShowPortfolioNudgeModal(true);
+      }
+    }
+
     setTrades(next);
     setShowForm(false);
     setEditTrade(null);
@@ -557,6 +805,9 @@ export default function App() {
     const rounded = roundTo2(parsed);
     setPortfolioValue(rounded);
     setPortfolioValueInput(rounded.toFixed(2));
+    setHasSkippedPortfolioValue(false);
+    setDismissedPortfolioBanner(false);
+    setDismissedAfter5Trades(false);
     pushToast('success', 'Portfolio value updated.');
   };
 
@@ -745,17 +996,27 @@ export default function App() {
             <p className="ui-number text-base font-semibold text-[color:#fbbf24]">{summary.open}</p>
           </div>
           <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] px-2.5 py-2 shadow-[var(--shadow-card)]">
-            <div className="flex items-center justify-between">
-              <p className="ui-label">Exposure</p>
-              <p className="ui-number text-[11px] font-semibold">{openExposure.percent.toFixed(1)}%</p>
-            </div>
-            <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-[var(--surface-3)]">
-              <div
-                className="h-full rounded-full bg-[linear-gradient(90deg,var(--accent),#2dd4bf)]"
-                style={{ width: `${Math.min(openExposure.percent, 100)}%` }}
-              />
-            </div>
-            <p className="ui-number mt-1 text-[11px] text-[var(--muted)]">{formatCurrency(openExposure.value)}</p>
+            {portfolioValue > 0 ? (
+              <>
+                <div className="flex items-center justify-between">
+                  <p className="ui-label">Open Exposure</p>
+                  <p className="ui-number text-[11px] font-semibold">{openExposure.percent.toFixed(1)}%</p>
+                </div>
+                <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-[var(--surface-3)]">
+                  <div
+                    className="h-full rounded-full bg-[linear-gradient(90deg,var(--accent),#2dd4bf)]"
+                    style={{ width: `${Math.min(openExposure.percent, 100)}%` }}
+                  />
+                </div>
+                <p className="ui-number mt-1 text-[11px] text-[var(--muted)]">{formatCurrency(openExposure.value)}</p>
+              </>
+            ) : (
+              <>
+                <p className="ui-label">Open Exposure</p>
+                <p className="ui-number text-base font-semibold">{formatCurrency(openExposure.value)}</p>
+                <p className="mt-1 text-[11px] text-[var(--muted)]">🔒 Set portfolio value to see %</p>
+              </>
+            )}
           </div>
         </section>
 
@@ -784,6 +1045,15 @@ export default function App() {
 
           {tab === 'overview' && (
             <div className="space-y-2.5">
+              {portfolioValue === 0 && hasSkippedPortfolioValue && !dismissedPortfolioBanner ? (
+                <PortfolioValueBanner
+                  onSetValue={() => {
+                    setTab('settings');
+                  }}
+                  onDismiss={() => setDismissedPortfolioBanner(true)}
+                />
+              ) : null}
+
               {reminders.map((reminder) => (
                 <div
                   key={reminder.id}
@@ -1079,23 +1349,35 @@ export default function App() {
                           <p className="ui-label">Position Value</p>
                           <p className="ui-number">{formatCurrency(positionValue)}</p>
                         </div>
-                        <div className="rounded border border-[var(--border)] bg-[var(--surface)] px-2 py-1.5">
-                          <p className="ui-label">PF Share</p>
-                          <p className="ui-number">{portfolioShare.toFixed(2)}%</p>
-                        </div>
+                        {portfolioValue > 0 ? (
+                          <div className="rounded border border-[var(--border)] bg-[var(--surface)] px-2 py-1.5">
+                            <p className="ui-label">PF Share</p>
+                            <p className="ui-number">{portfolioShare.toFixed(2)}%</p>
+                          </div>
+                        ) : null}
                       </div>
 
                       <div className="mt-2 rounded border border-[var(--border)] bg-[var(--surface)] px-2 py-1.5">
-                        <div className="flex items-center justify-between text-[11px] text-[var(--muted)]">
-                          <span className="ui-label">Exposure</span>
-                          <span className="ui-number">{portfolioShare.toFixed(2)}%</span>
-                        </div>
-                        <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-[var(--surface-3)]">
-                          <div
-                            className="h-full rounded-full bg-[linear-gradient(90deg,var(--accent),#2dd4bf)]"
-                            style={{ width: `${exposureWidth}%` }}
-                          />
-                        </div>
+                        {portfolioValue > 0 ? (
+                          <>
+                            <div className="flex items-center justify-between text-[11px] text-[var(--muted)]">
+                              <span className="ui-label">Exposure</span>
+                              <span className="ui-number">{portfolioShare.toFixed(2)}%</span>
+                            </div>
+                            <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-[var(--surface-3)]">
+                              <div
+                                className="h-full rounded-full bg-[linear-gradient(90deg,var(--accent),#2dd4bf)]"
+                                style={{ width: `${exposureWidth}%` }}
+                              />
+                            </div>
+                          </>
+                        ) : (
+                          <>
+                            <p className="ui-label">Exposure</p>
+                            <p className="ui-number text-sm">{formatCurrency(positionValue)}</p>
+                            <p className="mt-1 text-[11px] text-[var(--muted)]">🔒 Set portfolio value to see %</p>
+                          </>
+                        )}
                       </div>
 
                       <div className="mt-2 grid grid-cols-2 gap-1.5 text-sm">
@@ -1285,15 +1567,17 @@ export default function App() {
                             <p className="ui-label">Direction</p>
                             <p className="ui-number">{trade.direction.toUpperCase()}</p>
                           </div>
-                          <div className="rounded border border-[var(--border)] bg-[var(--surface)] px-2 py-1.5">
-                            <p className="ui-label">Position Value</p>
-                            <p className="ui-number">{formatCurrency(positionValue)}</p>
-                          </div>
+                        <div className="rounded border border-[var(--border)] bg-[var(--surface)] px-2 py-1.5">
+                          <p className="ui-label">Position Value</p>
+                          <p className="ui-number">{formatCurrency(positionValue)}</p>
+                        </div>
+                        {portfolioValue > 0 ? (
                           <div className="rounded border border-[var(--border)] bg-[var(--surface)] px-2 py-1.5">
                             <p className="ui-label">PF Share</p>
                             <p className="ui-number">{portfolioShare.toFixed(2)}%</p>
                           </div>
-                        </div>
+                        ) : null}
+                      </div>
 
                         <div className="mt-2 grid grid-cols-2 gap-1.5 text-sm">
                           <div className="rounded border border-[var(--border)] bg-[var(--surface)] px-2 py-1.5">
@@ -1315,6 +1599,22 @@ export default function App() {
 
           {tab === 'analytics' && (
             <div className="space-y-4">
+              {portfolioValue === 0 ? (
+                <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-4 text-center">
+                  <p className="mb-2 text-sm font-semibold">Limited Analytics</p>
+                  <p className="mb-3 text-sm text-[var(--muted)]">
+                    Set your portfolio value to see % based analytics and risk metrics.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setTab('settings')}
+                    className="min-h-11 rounded-lg bg-[var(--accent)] px-4 py-2 text-sm font-semibold text-black"
+                  >
+                    Set Portfolio Value
+                  </button>
+                </div>
+              ) : null}
+
               <div className="flex items-center justify-between rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-3">
                 <p className="text-sm">Analytics mode: {useUnrealized ? 'Realized + unrealized' : 'Realized only'}</p>
                 <button
@@ -1635,32 +1935,44 @@ export default function App() {
         />
       ) : null}
 
+      {showPortfolioNudgeModal ? (
+        <PortfolioValueNudgeModal
+          currentPnL={summary.realized + summary.unrealized}
+          currency={currency}
+          formatCurrency={formatCurrency}
+          onSet={(value) => {
+            setPortfolioValue(value);
+            setPortfolioValueInput(value.toFixed(2));
+            setHasSkippedPortfolioValue(false);
+            setDismissedPortfolioBanner(false);
+            setDismissedAfter5Trades(false);
+            setShowPortfolioNudgeModal(false);
+            pushToast('success', 'Portfolio value set. Advanced metrics unlocked.');
+          }}
+          onDismiss={() => {
+            setShowPortfolioNudgeModal(false);
+            setDismissedAfter5Trades(true);
+          }}
+        />
+      ) : null}
+
       {needsCurrencyOnboarding ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
-          <div className="w-full max-w-md rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-5">
-            <h2 className="text-xl font-semibold">Choose Your Base Currency</h2>
-            <p className="mt-1 text-sm text-[var(--muted)]">
-              This runs once on first open. You can change it later in Settings.
-            </p>
-            <select
-              value={currency}
-              onChange={(event) => setCurrency(event.target.value as CurrencyCode)}
-              className="mt-4 w-full rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-sm"
-            >
-              {MAJOR_CURRENCIES.map((currencyOption) => (
-                <option key={currencyOption.code} value={currencyOption.code}>
-                  {currencyOption.label}
-                </option>
-              ))}
-            </select>
-            <button
-              onClick={() => setNeedsCurrencyOnboarding(false)}
-              className="mt-4 w-full rounded-lg bg-white px-4 py-3 text-sm font-semibold text-black"
-            >
-              Start Journal
-            </button>
-          </div>
-        </div>
+        <OnboardingWizard
+          currency={currency}
+          setCurrency={setCurrency}
+          portfolioValue={portfolioValue}
+          setPortfolioValue={setPortfolioValue}
+          portfolioValueInput={portfolioValueInput}
+          setPortfolioValueInput={setPortfolioValueInput}
+          onComplete={({ skippedPortfolioValue }) => {
+            setHasSkippedPortfolioValue(skippedPortfolioValue);
+            if (!skippedPortfolioValue) {
+              setDismissedPortfolioBanner(false);
+              setDismissedAfter5Trades(false);
+            }
+            setNeedsCurrencyOnboarding(false);
+          }}
+        />
       ) : null}
     </div>
   );

@@ -15,6 +15,7 @@ export type CurrencyCode = (typeof MAJOR_CURRENCIES)[number]['code'];
 
 export const DEFAULT_CURRENCY: CurrencyCode = 'USD';
 export const CURRENCY_STORAGE_KEY = 'settings.currency';
+export const PORTFOLIO_VALUE_STORAGE_KEY = 'settings.portfolioValue';
 
 export function isCurrencyCode(value: string): value is CurrencyCode {
   return MAJOR_CURRENCIES.some((currency) => currency.code === value);
