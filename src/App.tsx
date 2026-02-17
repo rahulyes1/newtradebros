@@ -24,7 +24,7 @@ import {
   Wallet,
   X,
 } from 'lucide-react';
-import type { GoalType } from './shared/types/goal';
+import type { Goal, GoalType } from './shared/types/goal';
 import type { AddExitLegInput, CreateOpenTradeInput, Trade } from './shared/types/trade';
 import { LocalTradeRepository } from './features/trades/repository/tradeRepository';
 import { LocalGoalRepository } from './features/goals/repository/goalRepository';
@@ -88,6 +88,13 @@ interface RefreshResult {
   priceChanges: Record<string, PriceChange>;
 }
 
+interface CloudTradingDataRow {
+  user_id: string;
+  trades: unknown;
+  goals: unknown;
+  updated_at?: string | null;
+}
+
 const C = {
   grid: '#283243',
   text: '#9ca3af',
@@ -123,6 +130,8 @@ const INSIGHTS_TOOLTIP_DISMISSED_KEY = 'tooltipDismissed.insights';
 const CURRENT_TAB_STORAGE_KEY = 'currentTab';
 const TRADE_VIEW_MODE_STORAGE_KEY = 'tradeViewMode';
 const DISMISSED_INSIGHTS_STORAGE_KEY = 'dismissedInsights';
+const GOALS_STORAGE_KEY = 'goals';
+const CLOUD_TRADING_DATA_TABLE = 'user_trading_data';
 const GOAL_LABELS: Record<GoalType, string> = {
   monthly_pnl: 'Monthly P&L',
   monthly_win_rate: 'Monthly Win Rate',
@@ -202,6 +211,63 @@ function parseBoolean(value: unknown): boolean | undefined {
     return false;
   }
   return undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function parseCloudTrades(value: unknown): Trade[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter((item): item is Trade => isRecord(item) && typeof item.id === 'string');
+}
+
+function parseCloudGoals(value: unknown): Goal[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter((item): item is Goal => {
+    if (!isRecord(item)) {
+      return false;
+    }
+    if (typeof item.id !== 'string' || typeof item.period !== 'string') {
+      return false;
+    }
+    if (item.type !== 'monthly_pnl' && item.type !== 'monthly_win_rate' && item.type !== 'monthly_trade_count') {
+      return false;
+    }
+    return true;
+  });
+}
+
+function mergeTradesByLatest(localTrades: Trade[], remoteTrades: Trade[]): Trade[] {
+  const merged = new Map<string, Trade>();
+  [...localTrades, ...remoteTrades].forEach((trade) => {
+    const existing = merged.get(trade.id);
+    if (!existing) {
+      merged.set(trade.id, trade);
+      return;
+    }
+    merged.set(trade.id, trade.updatedAt > existing.updatedAt ? trade : existing);
+  });
+  return [...merged.values()].sort((a, b) => b.date.localeCompare(a.date) || b.updatedAt.localeCompare(a.updatedAt));
+}
+
+function mergeGoalsByLatest<
+  T extends { id: string; updatedAt: string }
+>(localGoals: T[], remoteGoals: T[]): T[] {
+  const merged = new Map<string, T>();
+  [...localGoals, ...remoteGoals].forEach((goal) => {
+    const existing = merged.get(goal.id);
+    if (!existing) {
+      merged.set(goal.id, goal);
+      return;
+    }
+    merged.set(goal.id, goal.updatedAt > existing.updatedAt ? goal : existing);
+  });
+  return [...merged.values()];
 }
 
 function parseIsoDate(dateIso: string): Date {
@@ -1052,6 +1118,8 @@ export default function App() {
   const [authNotice, setAuthNotice] = useState('');
   const [isSigningInWithGoogle, setIsSigningInWithGoogle] = useState(false);
   const [isSyncingSettings, setIsSyncingSettings] = useState(false);
+  const [isSyncingCloudData, setIsSyncingCloudData] = useState(false);
+  const [hasHydratedCloudData, setHasHydratedCloudData] = useState(false);
   const [hasDoneInitialAutoRefresh, setHasDoneInitialAutoRefresh] = useState(false);
   const [toastPosition, setToastPosition] = useState<'bottom-center' | 'top-right'>(() =>
     window.innerWidth >= 768 ? 'top-right' : 'bottom-center'
@@ -1062,6 +1130,9 @@ export default function App() {
   const recentUpdateClearTimerRef = useRef<number | null>(null);
   const priceChangeClearTimerRef = useRef<number | null>(null);
   const announcedGoalIdsRef = useRef<Set<string>>(new Set());
+  const tradesRef = useRef<Trade[]>(trades);
+  const goalsRef = useRef<Goal[]>(goals);
+  const lastSyncedCloudSnapshotRef = useRef('');
 
   const currencyFormatter = useMemo(() => buildCurrencyFormatter(currency), [currency]);
 
@@ -1191,6 +1262,8 @@ export default function App() {
         applyAccountMetadata(user);
         setAuthNotice(`Signed in as ${user.email ?? 'account user'}.`);
       } else {
+        setHasHydratedCloudData(false);
+        lastSyncedCloudSnapshotRef.current = '';
         setAuthNotice('Not signed in. Settings are saved locally on this device.');
       }
       setIsAuthReady(true);
@@ -1210,6 +1283,8 @@ export default function App() {
         applyAccountMetadata(user);
         setAuthNotice(`Signed in as ${user.email ?? 'account user'}.`);
       } else {
+        setHasHydratedCloudData(false);
+        lastSyncedCloudSnapshotRef.current = '';
         setAuthNotice('Signed out. Settings stay local on this device.');
       }
       setIsAuthReady(true);
@@ -1231,6 +1306,14 @@ export default function App() {
       window.removeEventListener('offline', onOffline);
     };
   }, []);
+
+  useEffect(() => {
+    tradesRef.current = trades;
+  }, [trades]);
+
+  useEffect(() => {
+    goalsRef.current = goals;
+  }, [goals]);
 
   useEffect(() => {
     const tick = window.setInterval(() => setRefreshTick((value) => value + 1), 30_000);
@@ -1454,6 +1537,118 @@ export default function App() {
     }
 
     let isCurrent = true;
+    const hydrateCloudData = async () => {
+      setIsSyncingCloudData(true);
+      const { data, error } = await supabase
+        .from(CLOUD_TRADING_DATA_TABLE)
+        .select('user_id,trades,goals,updated_at')
+        .eq('user_id', accountUser.id)
+        .maybeSingle<CloudTradingDataRow>();
+
+      if (!isCurrent) {
+        return;
+      }
+
+      if (error) {
+        if (error.code === '42P01') {
+          setAuthNotice('Signed in, but cloud table is missing. Create user_trading_data table to sync trades.');
+        } else {
+          setAuthNotice(`Signed in, but cloud data sync failed: ${error.message}`);
+        }
+        setHasHydratedCloudData(true);
+        setIsSyncingCloudData(false);
+        return;
+      }
+
+      const remoteTrades = parseCloudTrades(data?.trades);
+      const remoteGoals = parseCloudGoals(data?.goals);
+      const localTrades = tradesRef.current;
+      const localGoals = goalsRef.current;
+      const mergedTrades = mergeTradesByLatest(localTrades, remoteTrades);
+      const mergedGoals = mergeGoalsByLatest(localGoals, remoteGoals);
+
+      tradeRepo.saveTrades(mergedTrades);
+      setTrades(mergedTrades);
+      try {
+        localStorage.setItem(GOALS_STORAGE_KEY, JSON.stringify(mergedGoals));
+      } catch {
+        // Ignore localStorage write errors.
+      }
+      setGoals(mergedGoals);
+
+      const snapshot = JSON.stringify({ trades: mergedTrades, goals: mergedGoals });
+      lastSyncedCloudSnapshotRef.current = snapshot;
+      setHasHydratedCloudData(true);
+      setIsSyncingCloudData(false);
+
+      const { error: upsertError } = await supabase.from(CLOUD_TRADING_DATA_TABLE).upsert(
+        {
+          user_id: accountUser.id,
+          trades: mergedTrades,
+          goals: mergedGoals,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: 'user_id' }
+      );
+      if (upsertError && isCurrent) {
+        setAuthNotice(`Signed in, but cloud write failed: ${upsertError.message}`);
+      }
+    };
+
+    void hydrateCloudData();
+
+    return () => {
+      isCurrent = false;
+    };
+  }, [accountUser?.id, isAuthReady, tradeRepo]);
+
+  useEffect(() => {
+    if (!accountUser || !isAuthReady || !hasHydratedCloudData) {
+      return;
+    }
+
+    const snapshot = JSON.stringify({ trades, goals });
+    if (snapshot === lastSyncedCloudSnapshotRef.current) {
+      return;
+    }
+
+    let isCurrent = true;
+    const timer = window.setTimeout(async () => {
+      setIsSyncingCloudData(true);
+      const { error } = await supabase.from(CLOUD_TRADING_DATA_TABLE).upsert(
+        {
+          user_id: accountUser.id,
+          trades,
+          goals,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: 'user_id' }
+      );
+
+      if (!isCurrent) {
+        return;
+      }
+
+      if (error) {
+        setAuthNotice(`Signed in, but cloud data sync failed: ${error.message}`);
+      } else {
+        lastSyncedCloudSnapshotRef.current = snapshot;
+      }
+      setIsSyncingCloudData(false);
+    }, 1200);
+
+    return () => {
+      isCurrent = false;
+      window.clearTimeout(timer);
+    };
+  }, [accountUser?.id, goals, hasHydratedCloudData, isAuthReady, trades]);
+
+  useEffect(() => {
+    if (!accountUser || !isAuthReady) {
+      return;
+    }
+
+    let isCurrent = true;
     const timer = window.setTimeout(async () => {
       setIsSyncingSettings(true);
       const syncToastId = toast.loading('Syncing settings...');
@@ -1501,6 +1696,8 @@ export default function App() {
   useEffect(() => {
     if (!accountUser) {
       setIsSyncingSettings(false);
+      setIsSyncingCloudData(false);
+      setHasHydratedCloudData(false);
     }
   }, [accountUser]);
 
@@ -3452,7 +3649,10 @@ export default function App() {
                     <p className="mb-2 text-sm">
                       Signed in as <span className="font-semibold">{accountUser.email ?? accountUser.id}</span>
                     </p>
-                    <p className="mb-2 text-xs text-[var(--positive)]">Settings synced across devices</p>
+                    <p className="mb-2 text-xs text-[var(--positive)]">Trades, goals, and settings synced across devices</p>
+                    {isSyncingSettings || isSyncingCloudData ? (
+                      <p className="mb-2 text-xs text-[var(--accent)]">Syncing cloud data...</p>
+                    ) : null}
                     <button
                       type="button"
                       onClick={() => {
