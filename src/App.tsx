@@ -25,7 +25,7 @@ import {
   X,
 } from 'lucide-react';
 import type { GoalType } from './shared/types/goal';
-import type { AddExitLegInput, Trade } from './shared/types/trade';
+import type { AddExitLegInput, CreateOpenTradeInput, Trade } from './shared/types/trade';
 import { LocalTradeRepository } from './features/trades/repository/tradeRepository';
 import { LocalGoalRepository } from './features/goals/repository/goalRepository';
 import { buildAnalyticsSummary } from './features/analytics/analyticsService';
@@ -73,6 +73,19 @@ interface InsightCardProps {
   title: string;
   content: string;
   action?: InsightAction;
+}
+
+interface PriceChange {
+  oldMark: number;
+  newMark: number;
+  change: number;
+  changePercent: number;
+}
+
+interface RefreshResult {
+  refreshedCount: number;
+  updatedTradeIds: string[];
+  priceChanges: Record<string, PriceChange>;
 }
 
 const C = {
@@ -684,10 +697,10 @@ function InsightCard({
   }
 
   const icons: Record<InsightType, string> = {
-    success: '??',
-    warning: '??',
-    info: '??',
-    tip: '?',
+    success: '\u{1F4A1}',
+    warning: '\u26A0\uFE0F',
+    info: '\u2139\uFE0F',
+    tip: '\u2728',
   };
   const colors: Record<InsightType, string> = {
     success: 'var(--positive)',
@@ -701,10 +714,10 @@ function InsightCard({
       <div className="flex items-start gap-3">
         <span className="text-2xl">{icons[type]}</span>
         <div className="flex-1">
-          <h4 className="mb-1 font-semibold">{title}</h4>
-          <p className="text-sm leading-relaxed text-[var(--muted)]">{content}</p>
+          <h4 className="text-secondary-sm mb-1">{title}</h4>
+          <p className="text-tertiary leading-relaxed">{content}</p>
           {action ? (
-            <button type="button" onClick={action.onClick} className="mt-2 text-sm text-[var(--accent)] hover:underline">
+            <button type="button" onClick={action.onClick} className="mt-2 text-tertiary text-[var(--accent)] hover:underline">
               {action.label} {'\u2192'}
             </button>
           ) : null}
@@ -909,9 +922,22 @@ export default function App() {
   const [useUnrealized, setUseUnrealized] = useState<boolean>(() => getInitialBoolean(ANALYTICS_UNREALIZED_STORAGE_KEY, true));
   const [isRefreshingMarks, setIsRefreshingMarks] = useState(false);
   const [markRefreshError, setMarkRefreshError] = useState('');
+  const [lastRefreshTime, setLastRefreshTime] = useState<Date | null>(null);
+  const [refreshTick, setRefreshTick] = useState(0);
+  const [refreshProgress, setRefreshProgress] = useState(0);
+  const [isOnline, setIsOnline] = useState(() => navigator.onLine);
+  const [recentlyUpdatedTradeIds, setRecentlyUpdatedTradeIds] = useState<string[]>([]);
+  const [priceChangesByTradeId, setPriceChangesByTradeId] = useState<Record<string, PriceChange>>({});
+  const [pullStartY, setPullStartY] = useState(0);
+  const [pullDistance, setPullDistance] = useState(0);
+  const [isPulling, setIsPulling] = useState(false);
   const [showForm, setShowForm] = useState(false);
+  const [tradeFormInitialValues, setTradeFormInitialValues] = useState<Partial<CreateOpenTradeInput> | undefined>(undefined);
   const [editTrade, setEditTrade] = useState<Trade | null>(null);
   const [manageTrade, setManageTrade] = useState<Trade | null>(null);
+  const [showShortcuts, setShowShortcuts] = useState(false);
+  const [bulkSelectMode, setBulkSelectMode] = useState(false);
+  const [selectedTrades, setSelectedTrades] = useState<string[]>([]);
   const [tradeViewMode, setTradeViewMode] = useState<TradeViewMode>(() => {
     try {
       const saved = localStorage.getItem(TRADE_VIEW_MODE_STORAGE_KEY);
@@ -948,6 +974,10 @@ export default function App() {
     window.innerWidth >= 768 ? 'top-right' : 'bottom-center'
   );
   const refreshToastIdRef = useRef<string | number | null>(null);
+  const refreshInFlightRef = useRef(false);
+  const pullMetaRef = useRef<{ x: number; y: number; enabled: boolean }>({ x: 0, y: 0, enabled: false });
+  const recentUpdateClearTimerRef = useRef<number | null>(null);
+  const priceChangeClearTimerRef = useRef<number | null>(null);
   const announcedGoalIdsRef = useRef<Set<string>>(new Set());
 
   const currencyFormatter = useMemo(() => buildCurrencyFormatter(currency), [currency]);
@@ -968,7 +998,7 @@ export default function App() {
     return `${value < 0 ? '-' : ''}${currencySign}${absCompact}`;
   };
 
-  const pushToast = (kind: 'success' | 'error' | 'info' | 'warning', message: string, description?: string) => {
+  const pushToast = useCallback((kind: 'success' | 'error' | 'info' | 'warning', message: string, description?: string) => {
     if (kind === 'success') {
       toast.success(message, { description });
       return;
@@ -982,7 +1012,32 @@ export default function App() {
       return;
     }
     toast(message, { description });
-  };
+  }, []);
+
+  const haptic = useCallback((style: 'light' | 'medium' | 'heavy' = 'light') => {
+    if (!('vibrate' in navigator)) {
+      return;
+    }
+    const duration = style === 'light' ? 10 : style === 'medium' ? 20 : 45;
+    navigator.vibrate(duration);
+  }, []);
+
+  const refreshAgeLabel = useMemo(() => {
+    void refreshTick;
+    if (!lastRefreshTime) {
+      return 'Never';
+    }
+    const diffMs = Date.now() - lastRefreshTime.getTime();
+    const minutes = Math.floor(diffMs / 60000);
+    if (minutes < 1) {
+      return 'Just now';
+    }
+    if (minutes < 60) {
+      return `${minutes}m ago`;
+    }
+    const hours = Math.floor(minutes / 60);
+    return `${hours}h ago`;
+  }, [lastRefreshTime, refreshTick]);
 
   const dismissContextTip = (tip: ContextTipKey) => {
     setDismissedContextTips((prev) => ({ ...prev, [tip]: true }));
@@ -1085,6 +1140,33 @@ export default function App() {
     return () => {
       isMounted = false;
       subscription.unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
+    const onOnline = () => setIsOnline(true);
+    const onOffline = () => setIsOnline(false);
+    window.addEventListener('online', onOnline);
+    window.addEventListener('offline', onOffline);
+    return () => {
+      window.removeEventListener('online', onOnline);
+      window.removeEventListener('offline', onOffline);
+    };
+  }, []);
+
+  useEffect(() => {
+    const tick = window.setInterval(() => setRefreshTick((value) => value + 1), 30_000);
+    return () => window.clearInterval(tick);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (recentUpdateClearTimerRef.current != null) {
+        window.clearTimeout(recentUpdateClearTimerRef.current);
+      }
+      if (priceChangeClearTimerRef.current != null) {
+        window.clearTimeout(priceChangeClearTimerRef.current);
+      }
     };
   }, []);
 
@@ -1384,6 +1466,7 @@ export default function App() {
       setTrades(next);
       setShowForm(false);
       setEditTrade(null);
+      setTradeFormInitialValues(undefined);
 
       if (payload.mode === 'create') {
         pushToast('success', 'Trade Added', `${payload.data.symbol.toUpperCase()} ${payload.data.direction.toUpperCase()} position opened.`);
@@ -1463,40 +1546,77 @@ export default function App() {
     pushToast('info', mark == null ? 'Mark Price Cleared' : 'Mark Price Updated');
   };
 
-  const refreshOpenTradeMarks = async (options?: { silentIfNoOpen?: boolean }) => {
+  const refreshOpenTradeMarks = useCallback(async (options?: { silentIfNoOpen?: boolean }): Promise<RefreshResult | null> => {
+    if (refreshInFlightRef.current) {
+      return null;
+    }
+
+    if (!isOnline) {
+      setMarkRefreshError('You are offline. Reconnect to refresh mark prices.');
+      if (!options?.silentIfNoOpen) {
+        pushToast('error', 'You are offline', 'Price updates are unavailable.');
+      }
+      return null;
+    }
+
+    const openTrades = trades.filter((trade) => trade.status === 'open');
     const symbols = Array.from(
-      new Set(
-        trades
-          .filter((trade) => trade.status === 'open')
-          .map((trade) => trade.symbol.trim().toUpperCase())
-          .filter(Boolean)
-      )
+      new Set(openTrades.map((trade) => trade.symbol.trim().toUpperCase()).filter(Boolean))
     );
 
     if (symbols.length === 0) {
       if (!options?.silentIfNoOpen) {
         pushToast('info', 'No Open Positions', 'No open trades available for mark refresh.');
       }
-      return;
+      return {
+        refreshedCount: 0,
+        updatedTradeIds: [],
+        priceChanges: {},
+      };
     }
 
     setMarkRefreshError('');
     setIsRefreshingMarks(true);
+    setRefreshProgress(0);
+    refreshInFlightRef.current = true;
     if (!options?.silentIfNoOpen) {
       refreshToastIdRef.current = toast.loading('Refreshing prices...', {
         description: 'Fetching latest market marks',
       });
     }
+
     try {
       const pricesBySymbol: Record<string, number> = {};
-      await Promise.all(
-        symbols.map(async (symbol) => {
-          const price = await pricingService.getMarkPrice(symbol);
-          if (price != null) {
-            pricesBySymbol[symbol] = roundTo2(price);
-          }
-        })
-      );
+      for (let index = 0; index < symbols.length; index += 1) {
+        const symbol = symbols[index];
+        const price = await pricingService.getMarkPrice(symbol);
+        if (price != null) {
+          pricesBySymbol[symbol] = roundTo2(price);
+        }
+        setRefreshProgress(Math.round(((index + 1) / symbols.length) * 100));
+      }
+
+      const priceChanges: Record<string, PriceChange> = {};
+      const updatedTradeIds: string[] = [];
+      openTrades.forEach((trade) => {
+        const nextMark = pricesBySymbol[trade.symbol.toUpperCase()];
+        if (!Number.isFinite(nextMark) || nextMark <= 0) {
+          return;
+        }
+        const oldMark = trade.markPrice ?? trade.entryPrice;
+        const change = roundTo2(nextMark - oldMark);
+        if (Math.abs(change) < 0.000001) {
+          return;
+        }
+        updatedTradeIds.push(trade.id);
+        const changePercent = oldMark > 0 ? roundTo2((change / oldMark) * 100) : 0;
+        priceChanges[trade.id] = {
+          oldMark,
+          newMark: nextMark,
+          change,
+          changePercent,
+        };
+      });
 
       const next = tradeRepo.updateOpenTradeMarks(pricesBySymbol);
       setTrades(next);
@@ -1507,8 +1627,32 @@ export default function App() {
         const updated = next.find((trade) => trade.id === current.id) ?? null;
         return updated?.status === 'open' ? updated : null;
       });
+      setLastRefreshTime(new Date());
 
-      if (Object.keys(pricesBySymbol).length === 0 && !options?.silentIfNoOpen) {
+      if (updatedTradeIds.length > 0) {
+        setRecentlyUpdatedTradeIds(updatedTradeIds);
+        if (recentUpdateClearTimerRef.current != null) {
+          window.clearTimeout(recentUpdateClearTimerRef.current);
+        }
+        recentUpdateClearTimerRef.current = window.setTimeout(() => {
+          setRecentlyUpdatedTradeIds([]);
+          recentUpdateClearTimerRef.current = null;
+        }, 2000);
+      }
+
+      if (Object.keys(priceChanges).length > 0) {
+        setPriceChangesByTradeId(priceChanges);
+        if (priceChangeClearTimerRef.current != null) {
+          window.clearTimeout(priceChangeClearTimerRef.current);
+        }
+        priceChangeClearTimerRef.current = window.setTimeout(() => {
+          setPriceChangesByTradeId({});
+          priceChangeClearTimerRef.current = null;
+        }, 5000);
+      }
+
+      const refreshedCount = Object.keys(pricesBySymbol).length;
+      if (refreshedCount === 0 && !options?.silentIfNoOpen) {
         toast.error('Couldn\'t Refresh Prices', {
           id: refreshToastIdRef.current ?? undefined,
           description: 'No symbol quotes were returned.',
@@ -1516,9 +1660,11 @@ export default function App() {
       } else if (!options?.silentIfNoOpen) {
         toast.success('Prices Updated', {
           id: refreshToastIdRef.current ?? undefined,
-          description: `${Object.keys(pricesBySymbol).length} positions refreshed`,
+          description: `${refreshedCount} symbols refreshed`,
         });
       }
+
+      return { refreshedCount, updatedTradeIds, priceChanges };
     } catch {
       setMarkRefreshError('Could not refresh prices. Check your connection and try again.');
       if (!options?.silentIfNoOpen) {
@@ -1527,19 +1673,43 @@ export default function App() {
           description: 'Check your internet connection',
         });
       }
+      return null;
     } finally {
       refreshToastIdRef.current = null;
+      refreshInFlightRef.current = false;
       setIsRefreshingMarks(false);
+      setRefreshProgress(0);
+      setIsPulling(false);
+      setPullDistance(0);
     }
-  };
+  }, [isOnline, pricingService, pushToast, tradeRepo, trades]);
 
   useEffect(() => {
-    if (!autoRefreshMarks || hasDoneInitialAutoRefresh) {
+    if (!autoRefreshMarks || hasDoneInitialAutoRefresh || !isOnline) {
       return;
     }
     setHasDoneInitialAutoRefresh(true);
     void refreshOpenTradeMarks({ silentIfNoOpen: true });
-  }, [autoRefreshMarks, hasDoneInitialAutoRefresh]);
+  }, [autoRefreshMarks, hasDoneInitialAutoRefresh, isOnline, refreshOpenTradeMarks]);
+
+  useEffect(() => {
+    if (!autoRefreshMarks || !isOnline) {
+      return;
+    }
+    const hasOpenTrades = trades.some((trade) => trade.status === 'open');
+    if (!hasOpenTrades) {
+      return;
+    }
+
+    const intervalId = window.setInterval(() => {
+      if (refreshInFlightRef.current) {
+        return;
+      }
+      void refreshOpenTradeMarks({ silentIfNoOpen: true });
+    }, 5 * 60 * 1000);
+
+    return () => window.clearInterval(intervalId);
+  }, [autoRefreshMarks, isOnline, refreshOpenTradeMarks, trades]);
 
   const signInWithGoogle = async () => {
     setIsSigningInWithGoogle(true);
@@ -1635,6 +1805,199 @@ export default function App() {
       return;
     }
     clearAllData();
+  };
+
+  const openCreateTradeModal = (initialValues?: Partial<CreateOpenTradeInput>) => {
+    setEditTrade(null);
+    setTradeFormInitialValues(initialValues);
+    setShowForm(true);
+  };
+
+  const duplicateTrade = (tradeId: string) => {
+    const source = trades.find((trade) => trade.id === tradeId);
+    if (!source) {
+      return;
+    }
+    openCreateTradeModal({
+      date: localIsoDate(new Date()),
+      symbol: source.symbol,
+      direction: source.direction,
+      entryPrice: source.entryPrice,
+      quantity: source.quantity,
+      markPrice: source.markPrice,
+      setup: source.setup,
+      emotion: source.emotion,
+      notes: source.notes,
+    });
+    pushToast('info', `Prefilled ${source.symbol}`, 'Review values before saving.');
+  };
+
+  const closeTradeNow = async (tradeId: string) => {
+    const source = trades.find((trade) => trade.id === tradeId && trade.status === 'open');
+    if (!source) {
+      return false;
+    }
+    const qty = getRemainingQuantity(source);
+    if (qty <= 0) {
+      return false;
+    }
+    addLeg(tradeId, {
+      date: localIsoDate(new Date()),
+      quantity: qty,
+      exitPrice: source.markPrice ?? source.entryPrice,
+    });
+    return true;
+  };
+
+  const handleCloseAll = () => {
+    const targets = trades.filter((trade) => trade.status === 'open' && getRemainingQuantity(trade) > 0);
+    if (targets.length < 2) {
+      return;
+    }
+
+    toast('Close all open positions?', {
+      description: `This will close ${targets.length} trade${targets.length === 1 ? '' : 's'}.`,
+      duration: 7000,
+      action: {
+        label: 'Close All',
+        onClick: () => {
+          haptic('heavy');
+          let closedCount = 0;
+          targets.forEach((trade) => {
+            const qty = getRemainingQuantity(trade);
+            if (qty <= 0) {
+              return;
+            }
+            addLeg(trade.id, {
+              date: localIsoDate(new Date()),
+              quantity: qty,
+              exitPrice: trade.markPrice ?? trade.entryPrice,
+            });
+            closedCount += 1;
+          });
+          pushToast('success', 'Positions Closed', `Closed ${closedCount} open trade${closedCount === 1 ? '' : 's'}.`);
+        },
+      },
+      cancel: {
+        label: 'Cancel',
+        onClick: () => {
+          // no-op
+        },
+      },
+    });
+  };
+
+  const handleBulkExport = () => {
+    const selectedSet = new Set(selectedTrades);
+    const rows = trades.filter((trade) => selectedSet.has(trade.id));
+    handleExportTrades(rows);
+  };
+
+  const handleBulkDelete = () => {
+    if (selectedTrades.length === 0) {
+      return;
+    }
+    toast(`Delete ${selectedTrades.length} selected trade${selectedTrades.length === 1 ? '' : 's'}?`, {
+      description: 'This action cannot be undone.',
+      duration: 7000,
+      action: {
+        label: 'Delete',
+        onClick: () => {
+          haptic('medium');
+          let next = trades;
+          selectedTrades.forEach((id) => {
+            next = next.filter((trade) => trade.id !== id);
+          });
+          tradeRepo.saveTrades(next);
+          setTrades(next);
+          setSelectedTrades([]);
+          setBulkSelectMode(false);
+          pushToast('success', 'Trades Deleted', `${selectedTrades.length} trade${selectedTrades.length === 1 ? '' : 's'} removed.`);
+        },
+      },
+      cancel: {
+        label: 'Cancel',
+        onClick: () => {
+          // no-op
+        },
+      },
+    });
+  };
+
+  const setDateToToday = () => {
+    const today = localIsoDate(new Date());
+    setFrom(today);
+    setTo(today);
+  };
+
+  const setDateToThisWeek = () => {
+    const today = new Date();
+    const day = today.getDay();
+    const deltaToMonday = day === 0 ? 6 : day - 1;
+    const monday = new Date(today);
+    monday.setDate(today.getDate() - deltaToMonday);
+    setFrom(localIsoDate(monday));
+    setTo(localIsoDate(today));
+  };
+
+  const setDateToThisMonth = () => {
+    const today = new Date();
+    const firstDay = new Date(today.getFullYear(), today.getMonth(), 1);
+    setFrom(localIsoDate(firstDay));
+    setTo(localIsoDate(today));
+  };
+
+  const handleTradesTouchStart: React.TouchEventHandler<HTMLDivElement> = (event) => {
+    if (tab !== 'trades' || !isOnline || isRefreshingMarks) {
+      return;
+    }
+    if (event.touches.length !== 1) {
+      return;
+    }
+    const touch = event.touches[0];
+    const atTop = window.scrollY <= 0 && event.currentTarget.scrollTop <= 0;
+    pullMetaRef.current = { x: touch.clientX, y: touch.clientY, enabled: atTop };
+    setPullStartY(touch.clientY);
+  };
+
+  const handleTradesTouchMove: React.TouchEventHandler<HTMLDivElement> = (event) => {
+    const pullState = pullMetaRef.current;
+    if (!pullState.enabled || tab !== 'trades') {
+      return;
+    }
+    if (event.touches.length !== 1) {
+      return;
+    }
+    const touch = event.touches[0];
+    const deltaY = touch.clientY - pullState.y;
+    const deltaX = touch.clientX - pullState.x;
+
+    if (Math.abs(deltaX) > Math.abs(deltaY)) {
+      pullMetaRef.current.enabled = false;
+      setIsPulling(false);
+      setPullDistance(0);
+      return;
+    }
+    if (deltaY <= 0) {
+      setIsPulling(false);
+      setPullDistance(0);
+      return;
+    }
+
+    event.preventDefault();
+    setIsPulling(true);
+    setPullDistance(Math.min(deltaY, 120));
+  };
+
+  const handleTradesTouchEnd: React.TouchEventHandler<HTMLDivElement> = () => {
+    const shouldRefresh = pullMetaRef.current.enabled && pullDistance >= 60 && !isRefreshingMarks && isOnline;
+    pullMetaRef.current = { x: 0, y: 0, enabled: false };
+    setIsPulling(false);
+    setPullStartY(0);
+    setPullDistance(0);
+    if (shouldRefresh) {
+      void refreshOpenTradeMarks();
+    }
   };
 
   const summary = useMemo(() => {
@@ -1804,6 +2167,91 @@ export default function App() {
   const filteredOpenTrades = useMemo(() => filteredTrades.filter((trade) => trade.status === 'open'), [filteredTrades]);
   const winCount = useMemo(() => closedTrades.filter((trade) => trade.realizedPnl > 0).length, [closedTrades]);
   const lossCount = useMemo(() => closedTrades.filter((trade) => trade.realizedPnl < 0).length, [closedTrades]);
+  const totalOpenExposure = useMemo(
+    () => activeTrades.reduce((sum, trade) => sum + trade.entryPrice * getRemainingQuantity(trade), 0),
+    [activeTrades]
+  );
+  const lastTrade = useMemo(() => {
+    if (trades.length === 0) {
+      return null;
+    }
+    return [...trades].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0] ?? null;
+  }, [trades]);
+
+  useEffect(() => {
+    if (!bulkSelectMode) {
+      return;
+    }
+    setSelectedTrades([]);
+  }, [tab, search, flt, from, to, bulkSelectMode]);
+
+  useEffect(() => {
+    if (!bulkSelectMode) {
+      return;
+    }
+    setSelectedTrades((prev) => prev.filter((id) => trades.some((trade) => trade.id === id)));
+  }, [bulkSelectMode, trades]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      const tag = target?.tagName ?? '';
+      const isTypingField = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || Boolean(target?.isContentEditable);
+
+      if (isTypingField && event.key !== 'Escape') {
+        return;
+      }
+
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        const searchInput = document.querySelector<HTMLInputElement>('#search-input');
+        searchInput?.focus();
+        return;
+      }
+
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'n') {
+        event.preventDefault();
+        openCreateTradeModal();
+        return;
+      }
+
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'e') {
+        event.preventDefault();
+        handleExportTrades(filteredTrades);
+        return;
+      }
+
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'r') {
+        event.preventDefault();
+        void refreshOpenTradeMarks();
+        return;
+      }
+
+      if (event.key === 'Escape') {
+        setShowForm(false);
+        setManageTrade(null);
+        setShowShortcuts(false);
+        return;
+      }
+
+      if (!event.metaKey && !event.ctrlKey && !isTypingField && ['1', '2', '3', '4'].includes(event.key)) {
+        const tabMap: Tab[] = ['dashboard', 'trades', 'insights', 'profile'];
+        const mapped = tabMap[Number.parseInt(event.key, 10) - 1];
+        if (mapped) {
+          setTab(mapped);
+        }
+        return;
+      }
+
+      if (event.key === '?' && !event.metaKey && !event.ctrlKey && !isTypingField) {
+        event.preventDefault();
+        setShowShortcuts(true);
+      }
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [filteredTrades, handleExportTrades, refreshOpenTradeMarks]);
 
   const analytics = useMemo(() => buildAnalyticsSummary(trades, useUnrealized), [trades, useUnrealized]);
 
@@ -2134,10 +2582,7 @@ export default function App() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => {
-                    setEditTrade(null);
-                    setShowForm(true);
-                  }}
+                  onClick={() => openCreateTradeModal()}
                   className="min-h-11 rounded-lg bg-[var(--accent)] px-3 py-2 text-sm font-semibold text-black"
                 >
                   Add Trade
@@ -2162,10 +2607,7 @@ export default function App() {
                   description="Add your first trade to start tracking performance."
                   action={{
                     label: 'Add Trade',
-                    onClick: () => {
-                      setEditTrade(null);
-                      setShowForm(true);
-                    },
+                    onClick: () => openCreateTradeModal(),
                   }}
                 />
               )}
@@ -2202,38 +2644,109 @@ export default function App() {
           )}
 
           {tab === 'trades' && (
-            <div className="space-y-3">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <h2 className="text-lg font-semibold">Trades ({filteredTrades.length})</h2>
-                <div className="inline-flex rounded-lg border border-[var(--border)] bg-[var(--surface)] p-0.5">
-                  <button
-                    type="button"
-                    onClick={() => setTradeViewMode('card')}
-                    className={`flex min-h-11 items-center gap-1 rounded-md px-3 text-xs ${
-                      tradeViewMode === 'card' ? 'bg-[var(--surface-3)] text-[var(--text)]' : 'text-[var(--muted)]'
-                    }`}
-                  >
-                    <LayoutGrid size={12} /> Card
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setTradeViewMode('compact')}
-                    className={`flex min-h-11 items-center gap-1 rounded-md px-3 text-xs ${
-                      tradeViewMode === 'compact' ? 'bg-[var(--surface-3)] text-[var(--text)]' : 'text-[var(--muted)]'
-                    }`}
-                  >
-                    <List size={12} /> Compact
-                  </button>
+            <div
+              className="pull-to-refresh-wrapper space-y-3"
+              onTouchStart={handleTradesTouchStart}
+              onTouchMove={handleTradesTouchMove}
+              onTouchEnd={handleTradesTouchEnd}
+            >
+              {isPulling ? (
+                <div className="refresh-indicator h-16" data-pull-start={pullStartY}>
+                  <div className="flex items-center justify-center gap-2 text-tertiary">
+                    <RefreshCw
+                      size={18}
+                      className={pullDistance >= 60 ? 'animate-spin text-[var(--accent)]' : 'text-[var(--accent)]'}
+                      style={{ transform: `rotate(${Math.max(0, pullDistance * 3)}deg)` }}
+                    />
+                    <span>{pullDistance >= 60 ? 'Release to refresh' : 'Pull to refresh'}</span>
+                  </div>
                 </div>
-              </div>
+              ) : null}
+              <div className="space-y-3 transition-transform duration-150" style={{ transform: isPulling ? `translateY(${pullDistance * 0.35}px)` : undefined }}>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <h2 className="text-secondary">Trades ({filteredTrades.length})</h2>
+                    <p className="text-tertiary">Last refresh: {refreshAgeLabel}</p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setBulkSelectMode((value) => {
+                          const next = !value;
+                          if (!next) {
+                            setSelectedTrades([]);
+                          }
+                          return next;
+                        });
+                      }}
+                      className="min-h-11 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-1.5 text-tertiary"
+                    >
+                      {bulkSelectMode ? 'Cancel Select' : 'Select Multiple'}
+                    </button>
+                    <div className="inline-flex rounded-lg border border-[var(--border)] bg-[var(--surface)] p-0.5">
+                      <button
+                        type="button"
+                        onClick={() => setTradeViewMode('card')}
+                        className={`flex min-h-11 items-center gap-1 rounded-md px-3 text-tertiary ${
+                          tradeViewMode === 'card' ? 'bg-[var(--surface-3)] text-[var(--text)]' : 'text-[var(--muted)]'
+                        }`}
+                      >
+                        <LayoutGrid size={12} /> Card
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setTradeViewMode('compact')}
+                        className={`flex min-h-11 items-center gap-1 rounded-md px-3 text-tertiary ${
+                          tradeViewMode === 'compact' ? 'bg-[var(--surface-3)] text-[var(--text)]' : 'text-[var(--muted)]'
+                        }`}
+                      >
+                        <List size={12} /> Compact
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {!isOnline ? (
+                  <div className="rounded-lg border border-[var(--negative)] bg-[color:rgba(248,113,113,0.12)] p-3 text-tertiary text-[var(--negative)]">
+                    You are offline. Price updates are unavailable.
+                  </div>
+                ) : null}
+
+                {activeTrades.length > 1 ? (
+                  <div className="flex items-center justify-between rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-3">
+                    <div>
+                      <p className="text-secondary-sm">{activeTrades.length} open positions</p>
+                      <p className="text-tertiary text-numeric">Exposure: {formatCurrency(totalOpenExposure)}</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleCloseAll}
+                      className="min-h-11 rounded-lg bg-[var(--accent)] px-4 py-2 text-secondary-sm text-black"
+                    >
+                      Close All
+                    </button>
+                  </div>
+                ) : null}
+
+                {lastTrade ? (
+                  <button
+                    type="button"
+                    onClick={() => duplicateTrade(lastTrade.id)}
+                    className="min-h-11 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-1.5 text-tertiary"
+                  >
+                    Trade {lastTrade.symbol} again
+                  </button>
+                ) : null}
 
               <label className="relative block">
                 <Search size={14} className="pointer-events-none absolute left-2.5 top-2.5 text-[var(--muted)]" />
                 <input
+                  id="search-input"
                   value={search}
                   onChange={(event) => setSearch(event.target.value)}
                   placeholder="Search symbol"
-                  className="h-11 w-full rounded-lg border border-[var(--border)] bg-[var(--surface-3)] pl-8 pr-2.5 text-sm"
+                  className="h-11 w-full rounded-lg border border-[var(--border)] bg-[var(--surface-3)] pl-8 pr-2.5 text-secondary-sm"
                 />
               </label>
 
@@ -2275,6 +2788,14 @@ export default function App() {
                 </button>
               </div>
 
+              <div className="flex gap-2 overflow-x-auto pb-1">
+                <button type="button" onClick={setDateToToday} className="whitespace-nowrap rounded-full border border-[var(--border)] px-3 py-1 text-tertiary">Today</button>
+                <button type="button" onClick={setDateToThisWeek} className="whitespace-nowrap rounded-full border border-[var(--border)] px-3 py-1 text-tertiary">This Week</button>
+                <button type="button" onClick={setDateToThisMonth} className="whitespace-nowrap rounded-full border border-[var(--border)] px-3 py-1 text-tertiary">This Month</button>
+                <button type="button" onClick={() => setFlt('open')} className="whitespace-nowrap rounded-full border border-[var(--border)] px-3 py-1 text-tertiary">Open Only</button>
+                <button type="button" onClick={() => setFlt('losses')} className="whitespace-nowrap rounded-full border border-[var(--border)] px-3 py-1 text-tertiary">Losses Only</button>
+              </div>
+
               <div className="flex flex-wrap gap-2">
                 <input
                   type="date"
@@ -2303,6 +2824,32 @@ export default function App() {
                   </button>
                 ) : null}
               </div>
+
+              {bulkSelectMode ? (
+                <div className="sticky top-0 z-10 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-3">
+                  <div className="flex items-center justify-between">
+                    <p className="text-tertiary">{selectedTrades.length} selected</p>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        disabled={selectedTrades.length === 0}
+                        onClick={handleBulkExport}
+                        className="min-h-11 rounded-lg border border-[var(--border)] px-3 py-1.5 text-tertiary disabled:opacity-50"
+                      >
+                        Export
+                      </button>
+                      <button
+                        type="button"
+                        disabled={selectedTrades.length === 0}
+                        onClick={handleBulkDelete}
+                        className="min-h-11 rounded-lg border border-[var(--negative)] bg-[color:rgba(248,113,113,0.12)] px-3 py-1.5 text-tertiary text-[var(--negative)] disabled:opacity-50"
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
 
               <div className="grid gap-2 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-2.5 md:grid-cols-[minmax(0,1fr)_220px_auto] md:items-center">
                 <p className="text-sm text-[var(--muted)]">
@@ -2334,7 +2881,7 @@ export default function App() {
                     onClick={() => {
                       void refreshOpenTradeMarks();
                     }}
-                    disabled={isRefreshingMarks}
+                    disabled={isRefreshingMarks || !isOnline}
                     className="min-h-11 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2.5 py-1.5 text-xs disabled:opacity-60"
                   >
                     <RefreshCw size={13} className={`mr-1 inline ${isRefreshingMarks ? 'animate-spin' : ''}`} />
@@ -2355,6 +2902,20 @@ export default function App() {
                   <RefreshCw size={18} className="mx-auto mb-2 animate-spin text-[var(--accent)]" />
                   <p className="font-semibold text-[var(--text)]">Refreshing Market Prices...</p>
                   <p className="mt-1 text-xs">This may take a few seconds.</p>
+                  {activeTrades.length > 1 ? (
+                    <div className="mt-3">
+                      <div className="mb-1 flex items-center justify-between text-[11px]">
+                        <span>Progress</span>
+                        <span>{refreshProgress}%</span>
+                      </div>
+                      <div className="h-2 overflow-hidden rounded-full bg-[var(--surface-3)]">
+                        <div
+                          className="h-full bg-[var(--accent)] transition-all duration-300"
+                          style={{ width: `${refreshProgress}%` }}
+                        />
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
               ) : null}
 
@@ -2390,10 +2951,7 @@ export default function App() {
                   description="Add your first trade to begin journaling."
                   action={{
                     label: 'Add Trade',
-                    onClick: () => {
-                      setEditTrade(null);
-                      setShowForm(true);
-                    },
+                    onClick: () => openCreateTradeModal(),
                   }}
                 />
               ) : filteredTrades.length === 0 ? (
@@ -2414,64 +2972,87 @@ export default function App() {
               ) : tradeViewMode === 'compact' ? (
                 <div className="overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--surface-2)] shadow-[var(--shadow-card)]">
                   <div className="overflow-x-auto">
-                    <div className="min-w-[860px]">
-                      <div className="grid grid-cols-[92px_72px_62px_92px_70px_120px_74px_132px] gap-2 border-b border-[var(--border)] px-2 py-2">
+                    <div className="min-w-[900px]">
+                      <div className={`grid ${bulkSelectMode ? 'grid-cols-[44px_92px_72px_62px_92px_70px_120px_100px_132px]' : 'grid-cols-[92px_72px_62px_92px_70px_120px_100px_132px]'} gap-2 border-b border-[var(--border)] px-2 py-2`}>
+                        {bulkSelectMode ? <p className="ui-label">Select</p> : null}
                         <p className="ui-label">Symbol</p>
                         <p className="ui-label">Status</p>
                         <p className="ui-label">Side</p>
                         <p className="ui-label">Entry</p>
                         <p className="ui-label">Qty</p>
                         <p className="ui-label">P&amp;L</p>
-                        <p className="ui-label">%</p>
+                        <p className="ui-label">% / Delta</p>
                         <p className="ui-label text-right">Actions</p>
                       </div>
-                      {filteredTrades.map((trade) => (
-                        <div
-                          key={trade.id}
-                          className={`grid grid-cols-[92px_72px_62px_92px_70px_120px_74px_132px] items-center gap-2 border-b border-[var(--border)] px-2 py-1.5 last:border-b-0 ${
-                            trade.totalPnl >= 0 ? 'border-l-2 border-l-[var(--positive)]' : 'border-l-2 border-l-[var(--negative)]'
-                          }`}
-                        >
-                          <div className="min-w-0">
-                            <p className="truncate text-sm font-semibold">{trade.symbol}</p>
-                            <p className="truncate text-[10px] text-[var(--muted)]">{formatTradeDate(trade.date)}</p>
-                          </div>
-                          <p className="text-xs uppercase text-[var(--muted)]">{trade.status}</p>
-                          <p className="text-xs uppercase text-[var(--muted)]">{trade.direction === 'long' ? 'LONG' : 'SHORT'}</p>
-                          <p className="text-xs ui-number">{formatCurrency(trade.entryPrice)}</p>
-                          <p className="text-xs ui-number">{trade.quantity.toFixed(2)}</p>
-                          <p className={`text-xs font-semibold ui-number ${pnlClass(trade.totalPnl)}`}>{pnl(trade.totalPnl)}</p>
-                          <p className={`text-xs ui-number ${pnlClass(trade.totalPnl)}`}>{trade.totalPnlPercent.toFixed(2)}%</p>
-                          <div className="flex justify-end gap-1">
-                            {trade.status === 'open' ? (
+                      {filteredTrades.map((trade) => {
+                        const priceChange = priceChangesByTradeId[trade.id];
+                        return (
+                          <div
+                            key={trade.id}
+                            className={`grid ${bulkSelectMode ? 'grid-cols-[44px_92px_72px_62px_92px_70px_120px_100px_132px]' : 'grid-cols-[92px_72px_62px_92px_70px_120px_100px_132px]'} items-center gap-2 border-b border-[var(--border)] px-2 py-1.5 last:border-b-0 ${
+                              trade.totalPnl >= 0 ? 'border-l-2 border-l-[var(--positive)]' : 'border-l-2 border-l-[var(--negative)]'
+                            } ${recentlyUpdatedTradeIds.includes(trade.id) ? 'pulse-update' : ''}`}
+                          >
+                            {bulkSelectMode ? (
+                              <input
+                                type="checkbox"
+                                checked={selectedTrades.includes(trade.id)}
+                                onChange={(event) => {
+                                  setSelectedTrades((prev) => event.target.checked ? [...prev, trade.id] : prev.filter((id) => id !== trade.id));
+                                }}
+                                className="h-4 w-4 rounded"
+                                aria-label={`Select ${trade.symbol}`}
+                              />
+                            ) : null}
+                            <div className="min-w-0">
+                              <p className="truncate text-secondary-sm">{trade.symbol}</p>
+                              <p className="truncate text-tertiary-sm">{formatTradeDate(trade.date)}</p>
+                            </div>
+                            <p className="text-tertiary-sm uppercase">{trade.status}</p>
+                            <p className="text-tertiary-sm uppercase">{trade.direction === 'long' ? 'LONG' : 'SHORT'}</p>
+                            <p className="text-tertiary-sm text-numeric">{formatCurrency(trade.entryPrice)}</p>
+                            <p className="text-tertiary-sm text-numeric">{trade.quantity.toFixed(2)}</p>
+                            <p className={`text-secondary-sm text-numeric ${pnlClass(trade.totalPnl)}`}>{pnl(trade.totalPnl)}</p>
+                            <div>
+                              <p className={`text-tertiary-sm text-numeric ${pnlClass(trade.totalPnl)}`}>{trade.totalPnlPercent.toFixed(2)}%</p>
+                              {priceChange ? (
+                                <p className={`text-tertiary-sm text-numeric ${priceChange.change >= 0 ? 'text-[var(--positive)]' : 'text-[var(--negative)]'}`}>
+                                  {priceChange.change >= 0 ? '\u2191' : '\u2193'} {formatCurrency(Math.abs(priceChange.change))} ({Math.abs(priceChange.changePercent).toFixed(2)}%)
+                                </p>
+                              ) : null}
+                            </div>
+                            <div className="flex justify-end gap-1">
+                              {trade.status === 'open' ? (
+                                <button
+                                  type="button"
+                                  onClick={() => setManageTrade(trade)}
+                                  className="h-11 rounded-full bg-[color:rgba(245,158,11,0.18)] px-2.5 text-[10px] font-medium text-[color:#fbbf24] transition hover:brightness-110"
+                                >
+                                  Manage
+                                </button>
+                              ) : null}
                               <button
                                 type="button"
-                                onClick={() => setManageTrade(trade)}
-                                className="h-11 rounded-full bg-[color:rgba(245,158,11,0.18)] px-2.5 text-[10px] font-medium text-[color:#fbbf24] transition hover:brightness-110"
+                                onClick={() => {
+                                  setTradeFormInitialValues(undefined);
+                                  setEditTrade(trade);
+                                  setShowForm(true);
+                                }}
+                                className="h-11 w-11 rounded-md border border-[var(--border)] text-[var(--muted)] transition hover:text-[var(--text)]"
                               >
-                                Manage
+                                <Edit2 size={12} className="mx-auto" />
                               </button>
-                            ) : null}
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setEditTrade(trade);
-                                setShowForm(true);
-                              }}
-                              className="h-11 w-11 rounded-md border border-[var(--border)] text-[var(--muted)] transition hover:text-[var(--text)]"
-                            >
-                              <Edit2 size={12} className="mx-auto" />
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => delTrade(trade.id)}
-                              className="h-11 w-11 rounded-md border border-[var(--border)] text-[var(--muted)] transition hover:text-[var(--negative)]"
-                            >
-                              <Trash2 size={12} className="mx-auto" />
-                            </button>
+                              <button
+                                type="button"
+                                onClick={() => delTrade(trade.id)}
+                                className="h-11 w-11 rounded-md border border-[var(--border)] text-[var(--muted)] transition hover:text-[var(--negative)]"
+                              >
+                                <Trash2 size={12} className="mx-auto" />
+                              </button>
+                            </div>
                           </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   </div>
                 </div>
@@ -2485,16 +3066,29 @@ export default function App() {
                       portfolioValue={portfolioValue}
                       formatCurrency={formatCurrency}
                       formatTradeDate={formatTradeDate}
+                      showSelection={bulkSelectMode}
+                      selected={selectedTrades.includes(trade.id)}
+                      onSelectToggle={(tradeId, checked) => {
+                        setSelectedTrades((prev) => checked ? [...prev, tradeId] : prev.filter((id) => id !== tradeId));
+                      }}
+                      isRecentlyUpdated={recentlyUpdatedTradeIds.includes(trade.id)}
+                      priceChange={priceChangesByTradeId[trade.id]}
+                      onHaptic={haptic}
                       onToggle={(tradeId) => setExpandedTradeId((prev) => (prev === tradeId ? null : tradeId))}
                       onEdit={(tradeId) => {
                         const selected = filteredTrades.find((item) => item.id === tradeId);
                         if (!selected) {
                           return;
                         }
+                        setTradeFormInitialValues(undefined);
                         setEditTrade(selected);
                         setShowForm(true);
                       }}
                       onDelete={(tradeId) => delTrade(tradeId)}
+                      onDuplicate={duplicateTrade}
+                      onCloseQuick={(tradeId) => {
+                        void closeTradeNow(tradeId);
+                      }}
                       onManage={trade.status === 'open'
                         ? (tradeId) => {
                           const selected = filteredTrades.find((item) => item.id === tradeId && item.status === 'open');
@@ -2508,6 +3102,7 @@ export default function App() {
                   ))}
                 </div>
               )}
+            </div>
             </div>
           )}
 
@@ -2834,10 +3429,7 @@ export default function App() {
       </div>
 
       <button
-        onClick={() => {
-          setEditTrade(null);
-          setShowForm(true);
-        }}
+        onClick={() => openCreateTradeModal()}
         title="Add Trade"
         className="fixed bottom-24 right-4 z-50 flex h-14 w-14 items-center justify-center rounded-full border border-[color:rgba(96,165,250,0.6)] bg-[linear-gradient(130deg,#22d3ee,#3b82f6)] text-[#05101f] shadow-[0_14px_26px_rgba(37,99,235,0.35)] transition hover:brightness-110 md:bottom-6"
       >
@@ -2905,6 +3497,50 @@ export default function App() {
         </div>
       ) : null}
 
+      {showShortcuts ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+          <div className="w-full max-w-md rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-6">
+            <h2 className="text-secondary">Keyboard Shortcuts</h2>
+            <div className="mt-3 space-y-2 text-tertiary">
+              <div className="flex items-center justify-between"><span>Quick Search</span><kbd className="rounded bg-[var(--surface-2)] px-2 py-1">Ctrl/Cmd + K</kbd></div>
+              <div className="flex items-center justify-between"><span>New Trade</span><kbd className="rounded bg-[var(--surface-2)] px-2 py-1">Ctrl/Cmd + N</kbd></div>
+              <div className="flex items-center justify-between"><span>Refresh Prices</span><kbd className="rounded bg-[var(--surface-2)] px-2 py-1">Ctrl/Cmd + R</kbd></div>
+              <div className="flex items-center justify-between"><span>Export</span><kbd className="rounded bg-[var(--surface-2)] px-2 py-1">Ctrl/Cmd + E</kbd></div>
+              <div className="flex items-center justify-between"><span>Switch Tabs</span><kbd className="rounded bg-[var(--surface-2)] px-2 py-1">1-4</kbd></div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowShortcuts(false)}
+              className="mt-4 min-h-11 w-full rounded-lg bg-[var(--accent)] px-4 py-2 text-secondary-sm text-black"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {isRefreshingMarks ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/20 backdrop-blur-sm">
+          <div className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-6 text-center">
+            <RefreshCw size={42} className="mx-auto mb-3 animate-spin text-[var(--accent)]" />
+            <p className="text-secondary-sm">Refreshing Prices...</p>
+            <p className="text-tertiary">Updating {activeTrades.length} position{activeTrades.length === 1 ? '' : 's'}</p>
+          </div>
+        </div>
+      ) : null}
+
+      {isRefreshingMarks && activeTrades.length > 1 ? (
+        <div className="fixed bottom-20 left-4 right-4 z-[60] rounded-lg border border-[var(--border)] bg-[var(--surface)] p-3 md:left-auto md:right-4 md:w-[320px]">
+          <div className="mb-2 flex items-center justify-between text-tertiary">
+            <span>Refreshing prices...</span>
+            <span>{Math.round(refreshProgress)}%</span>
+          </div>
+          <div className="h-2 overflow-hidden rounded-full bg-[var(--surface-2)]">
+            <div className="h-full bg-[var(--accent)] transition-all duration-300" style={{ width: `${refreshProgress}%` }} />
+          </div>
+        </div>
+      ) : null}
+
       <Toaster
         position={toastPosition}
         offset={toastPosition === 'bottom-center' ? 88 : 16}
@@ -2918,14 +3554,16 @@ export default function App() {
 
       {showForm ? (
         <TradeFormModal
-          key={editTrade?.id ?? 'create'}
+          key={editTrade?.id ?? `create_${tradeFormInitialValues?.symbol ?? ''}_${tradeFormInitialValues?.date ?? ''}`}
           isOpen={showForm}
           trade={editTrade}
+          initialValues={editTrade ? undefined : tradeFormInitialValues}
           currency={currency}
           portfolioValue={portfolioValue}
           onClose={() => {
             setShowForm(false);
             setEditTrade(null);
+            setTradeFormInitialValues(undefined);
           }}
           onSubmit={submitTrade}
         />

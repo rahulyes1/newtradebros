@@ -5,6 +5,8 @@ import { getRemainingQuantity } from '../../../shared/services/tradeMath';
 interface TradeCardCollapsedProps {
   trade: Trade;
   formatCurrency: (value: number) => string;
+  priceChangeText?: string;
+  priceChangeClassName?: string;
   onToggle: () => void;
 }
 
@@ -35,7 +37,13 @@ function statusBadge(trade: Trade): { label: string; className: string } | null 
   return { label: 'OPEN', className: 'text-[color:#facc15]' };
 }
 
-export default function TradeCardCollapsed({ trade, formatCurrency, onToggle }: TradeCardCollapsedProps) {
+export default function TradeCardCollapsed({
+  trade,
+  formatCurrency,
+  priceChangeText,
+  priceChangeClassName,
+  onToggle,
+}: TradeCardCollapsedProps) {
   const status = statusBadge(trade);
 
   return (
@@ -47,22 +55,23 @@ export default function TradeCardCollapsed({ trade, formatCurrency, onToggle }: 
     >
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-2">
-          <p className="text-lg font-semibold leading-none">{trade.symbol}</p>
+          <p className="text-secondary leading-none">{trade.symbol}</p>
           <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${sideBadgeClass(trade.direction)}`}>
             {trade.direction.toUpperCase()}
           </span>
           {status ? <span className={`text-[10px] font-semibold ${status.className}`}>o {status.label}</span> : null}
         </div>
-        <p className="mt-1 text-[13px] text-[var(--muted)]">
+        <p className="text-tertiary mt-1 text-numeric">
           {formatCurrency(trade.entryPrice)} x {trade.quantity.toFixed(2)}
         </p>
       </div>
       <div className="shrink-0 text-right">
-        <p className={`text-xl font-bold leading-none ${pnlClass(trade.totalPnl)}`}>
+        <p className={`text-primary-sm text-numeric leading-none ${pnlClass(trade.totalPnl)}`}>
           {`${trade.totalPnl >= 0 ? '+' : ''}${formatCurrency(trade.totalPnl)}`}
         </p>
-        <p className={`mt-1 text-xs ${pnlClass(trade.totalPnl)}`}>{`(${trade.totalPnlPercent.toFixed(2)}%)`}</p>
-        <p className="mt-1 flex items-center justify-end gap-1 text-[11px] text-[var(--muted)]">
+        <p className={`text-tertiary-sm text-numeric ${pnlClass(trade.totalPnl)}`}>{`(${trade.totalPnlPercent.toFixed(2)}%)`}</p>
+        {priceChangeText ? <p className={`text-tertiary-sm text-numeric ${priceChangeClassName ?? ''}`}>{priceChangeText}</p> : null}
+        <p className="text-tertiary-sm mt-1 flex items-center justify-end gap-1">
           Tap for details <ChevronDown size={12} />
         </p>
       </div>

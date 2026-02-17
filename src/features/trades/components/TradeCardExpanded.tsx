@@ -7,6 +7,8 @@ interface TradeCardExpandedProps {
   portfolioValue: number;
   formatCurrency: (value: number) => string;
   formatTradeDate: (dateIso: string) => string;
+  priceChangeText?: string;
+  priceChangeClassName?: string;
   onToggle: () => void;
   onEdit: () => void;
   onDelete: () => void;
@@ -34,6 +36,8 @@ export default function TradeCardExpanded({
   portfolioValue,
   formatCurrency,
   formatTradeDate,
+  priceChangeText,
+  priceChangeClassName,
   onToggle,
   onEdit,
   onDelete,
@@ -63,16 +67,16 @@ export default function TradeCardExpanded({
       <header className="flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
-            <p className="text-lg font-semibold">{trade.symbol}</p>
+            <p className="text-secondary">{trade.symbol}</p>
             <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${sideBadgeClass(trade.direction)}`}>
               {trade.direction.toUpperCase()}
             </span>
             {statusText ? <span className={`text-[10px] font-semibold ${statusClass}`}>o {statusText}</span> : null}
           </div>
-          <p className="mt-1 text-sm text-[var(--muted)]">
+          <p className="text-tertiary text-numeric mt-1">
             Entry: {formatCurrency(trade.entryPrice)} x {trade.quantity.toFixed(2)} qty
           </p>
-          <p className="text-xs text-[var(--muted)]">{formatTradeDate(trade.date)}</p>
+          <p className="text-tertiary-sm">{formatTradeDate(trade.date)}</p>
         </div>
         <div className="flex items-center gap-1">
           {onManage ? (
@@ -104,32 +108,37 @@ export default function TradeCardExpanded({
       </header>
 
       <div className="my-3 border-t border-[var(--border)] pt-3 text-center">
-        <p className="text-[11px] uppercase tracking-[0.07em] text-[var(--muted)]">Total P&amp;L</p>
-        <p className={`mt-1 text-[28px] font-bold leading-none ${pnlClass(trade.totalPnl)}`}>
+        <p className="text-label">Total P&amp;L</p>
+        <p className={`text-primary mt-1 text-numeric leading-none ${pnlClass(trade.totalPnl)}`}>
           {`${trade.totalPnl >= 0 ? '+' : ''}${formatCurrency(trade.totalPnl)}`}
         </p>
-        <p className={`mt-1 text-xl font-semibold ${pnlClass(trade.totalPnl)}`}>{`(${trade.totalPnlPercent.toFixed(2)}%)`}</p>
+        <p className={`text-secondary text-numeric ${pnlClass(trade.totalPnl)}`}>{`(${trade.totalPnlPercent.toFixed(2)}%)`}</p>
+        {priceChangeText ? <p className={`text-tertiary-sm text-numeric ${priceChangeClassName ?? ''}`}>{priceChangeText}</p> : null}
       </div>
 
       <div className="my-3 border-t border-[var(--border)] pt-3">
-        <p className="mb-1 text-[11px] font-semibold uppercase tracking-[0.06em] text-[var(--muted)]">Position Details</p>
-        <p className="text-sm">* Position Value: {formatCurrency(positionValue)}</p>
-        <p className="text-sm">* Remaining Qty: {remainingQty.toFixed(2)}</p>
-        <p className="text-sm">
-          * {positionValuePct.toFixed(1)}% of entry value - <span className="text-[var(--muted)]">{positionContext}</span>
+        <p className="text-label mb-1">Position Details</p>
+        <p className="text-tertiary">
+          * Position Value: <span className="text-secondary-sm text-numeric">{formatCurrency(positionValue)}</span>
+        </p>
+        <p className="text-tertiary">
+          * Remaining Qty: <span className="text-secondary-sm text-numeric">{remainingQty.toFixed(2)}</span>
+        </p>
+        <p className="text-tertiary">
+          * <span className="text-numeric">{positionValuePct.toFixed(1)}%</span> of entry value - <span className="text-tertiary">{positionContext}</span>
         </p>
         {portfolioValue <= 0 ? (
-          <p className="mt-1 text-xs text-[var(--muted)]">Set portfolio value to see position % of portfolio</p>
+          <p className="text-tertiary-sm mt-1">Set portfolio value to see position % of portfolio</p>
         ) : null}
       </div>
 
       <div className="my-3 border-t border-[var(--border)] pt-3">
-        <p className="mb-1 text-[11px] font-semibold uppercase tracking-[0.06em] text-[var(--muted)]">Exit History</p>
-        <p className="text-sm">
-          * Realized: {`${trade.realizedPnl >= 0 ? '+' : ''}${formatCurrency(trade.realizedPnl)}`} ({trade.exitLegs.length} exits)
+        <p className="text-label mb-1">Exit History</p>
+        <p className="text-tertiary">
+          * Realized: <span className={`text-secondary-sm text-numeric ${pnlClass(trade.realizedPnl)}`}>{`${trade.realizedPnl >= 0 ? '+' : ''}${formatCurrency(trade.realizedPnl)}`}</span> ({trade.exitLegs.length} exits)
         </p>
-        <p className="text-sm">
-          * Unrealized: {`${trade.unrealizedPnl >= 0 ? '+' : ''}${formatCurrency(trade.unrealizedPnl)}`} ({remainingQty.toFixed(2)} qty open)
+        <p className="text-tertiary">
+          * Unrealized: <span className={`text-secondary-sm text-numeric ${pnlClass(trade.unrealizedPnl)}`}>{`${trade.unrealizedPnl >= 0 ? '+' : ''}${formatCurrency(trade.unrealizedPnl)}`}</span> ({remainingQty.toFixed(2)} qty open)
         </p>
       </div>
 
@@ -137,7 +146,7 @@ export default function TradeCardExpanded({
         type="button"
         onClick={onToggle}
         aria-label={`Collapse trade details for ${trade.symbol}`}
-        className="mt-2 flex min-h-11 items-center gap-1 text-sm text-[var(--muted)] transition hover:text-[var(--text)]"
+        className="text-tertiary mt-2 flex min-h-11 items-center gap-1 transition hover:text-[var(--text)]"
       >
         Collapse <ChevronUp size={13} />
       </button>

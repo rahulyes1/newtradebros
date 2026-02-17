@@ -1,4 +1,4 @@
-import { useMemo, useState, type FormEvent } from 'react';
+﻿import { useMemo, useState, type FormEvent } from 'react';
 import { X } from 'lucide-react';
 import type { AddExitLegInput, Trade } from '../../../shared/types/trade';
 import type { CurrencyCode } from '../../../shared/config/tradingOptions';
@@ -112,7 +112,7 @@ export default function CloseTradeModal({
     <div className="modal-backdrop fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-3 sm:p-4">
       <div className="modal-panel max-h-[92vh] w-full max-w-xl overflow-y-auto rounded-2xl border border-[var(--border)] bg-[var(--surface)]">
         <div className="flex items-center justify-between border-b border-[var(--border)] px-4 py-3">
-          <h2 className="text-xl font-semibold text-[var(--text)]">Manage Open Trade</h2>
+          <h2 className="text-secondary">Manage Open Trade</h2>
           <button
             type="button"
             className="flex h-11 w-11 items-center justify-center rounded-lg text-[var(--muted)] transition hover:bg-[var(--surface-2)] hover:text-[var(--text)]"
@@ -163,7 +163,7 @@ export default function CloseTradeModal({
           </div>
 
           <form onSubmit={confirmExit} className="space-y-3 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-3">
-            <h3 className="text-sm font-semibold text-[var(--text)]">Exit Builder</h3>
+            <h3 className="text-secondary-sm">Exit Builder</h3>
             <div className="grid grid-cols-2 gap-2">
               <button
                 type="button"
@@ -228,7 +228,7 @@ export default function CloseTradeModal({
             </div>
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
               <label className="space-y-1 text-sm">
-                <span className="text-[var(--muted)]">Exit Date</span>
+                <span className="text-label">Exit Date</span>
                 <input
                   type="date"
                   value={exitDate}
@@ -238,7 +238,7 @@ export default function CloseTradeModal({
                 />
               </label>
               <label className="space-y-1 text-sm">
-                <span className="text-[var(--muted)]">Exit Price ({currency})</span>
+                <span className="text-label">Exit Price ({currency})</span>
                 <input
                   type="number"
                   min="0"
@@ -250,7 +250,7 @@ export default function CloseTradeModal({
                 />
               </label>
               <label className="space-y-1 text-sm">
-                <span className="text-[var(--muted)]">Exit Quantity</span>
+                <span className="text-label">Exit Quantity</span>
                 <input
                   type="number"
                   min="0"
@@ -263,7 +263,7 @@ export default function CloseTradeModal({
                 />
               </label>
               <label className="space-y-1 text-sm">
-                <span className="text-[var(--muted)]">Fees ({currency}, optional)</span>
+                <span className="text-label">Fees ({currency}, optional)</span>
                 <input
                   type="number"
                   min="0"
@@ -275,13 +275,13 @@ export default function CloseTradeModal({
               </label>
             </div>
             <div className="rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm">
-              <p className="text-[var(--muted)]">
+              <p className="text-label">
                 Remaining after exit:{' '}
                 <span className="font-semibold text-[var(--text)]">
                   {Number.isFinite(parsedExitQty) ? Math.max(0, remainingQty - parsedExitQty).toFixed(2) : remainingQty.toFixed(2)}
                 </span>
               </p>
-              <p className="text-[var(--muted)]">
+              <p className="text-label">
                 Estimated leg P&L:{' '}
                 <span className={previewPnl != null && previewPnl >= 0 ? 'text-[var(--positive)]' : 'text-[var(--negative)]'}>
                   {previewPnl != null ? formatCurrency(previewPnl) : '-'}
@@ -289,7 +289,7 @@ export default function CloseTradeModal({
               </p>
             </div>
             <label className="block space-y-1 text-sm">
-              <span className="text-[var(--muted)]">Note (optional)</span>
+              <span className="text-label">Note (optional)</span>
               <input
                 type="text"
                 value={note}
@@ -311,8 +311,8 @@ export default function CloseTradeModal({
               <div className="space-y-2 text-sm">
                 {trade.exitLegs.map((leg) => (
                   <div key={leg.id} className="flex items-center justify-between rounded-lg bg-[var(--surface)] px-3 py-2">
-                    <span className="text-[var(--muted)]">{leg.date}</span>
-                    <span className="text-[var(--text)]">
+                    <span className="text-label">{leg.date}</span>
+                    <span className="text-secondary-sm">
                       {leg.quantity} @ {formatCurrency(leg.exitPrice)}
                     </span>
                   </div>
@@ -325,4 +325,5 @@ export default function CloseTradeModal({
     </div>
   );
 }
+
 

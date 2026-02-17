@@ -43,17 +43,66 @@ body {
   font-family: var(--font-body);
   font-variant-numeric: tabular-nums;
   font-feature-settings: 'tnum' 1;
+  overscroll-behavior-y: contain;
 }
 
-.ui-label {
+/* Typography System */
+.text-primary {
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--text-strong);
+  line-height: 1.2;
+}
+
+.text-primary-sm {
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--text-strong);
+  line-height: 1.2;
+}
+
+.text-secondary {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.4;
+}
+
+.text-secondary-sm {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.4;
+}
+
+.text-tertiary {
+  font-size: 13px;
+  font-weight: 500;
   color: var(--muted);
-  font-size: 11px;
-  letter-spacing: 0.06em;
+  line-height: 1.5;
+}
+
+.text-tertiary-sm {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.text-label,
+.ui-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted);
+  line-height: 1.5;
+  letter-spacing: 0.5px;
   text-transform: uppercase;
 }
 
+.text-numeric,
 .ui-number {
   font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum';
 }
 
 .toast-slide {
@@ -245,4 +294,49 @@ button:active {
   border-radius: 12px;
   padding: 16px;
   margin-bottom: 16px;
+}
+
+.pull-to-refresh-wrapper {
+  min-height: 100vh;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.refresh-indicator {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: var(--bg);
+}
+
+@keyframes pulseUpdate {
+  0%,
+  100% {
+    background-color: transparent;
+  }
+  50% {
+    background-color: rgba(125, 211, 252, 0.12);
+  }
+}
+
+.pulse-update {
+  animation: pulseUpdate 600ms ease-in-out;
+}
+
+@media (max-width: 640px) {
+  .text-primary {
+    font-size: 24px;
+  }
+
+  .text-primary-sm {
+    font-size: 20px;
+  }
+
+  .text-secondary {
+    font-size: 16px;
+  }
+
+  .text-secondary-sm {
+    font-size: 14px;
+  }
 }
