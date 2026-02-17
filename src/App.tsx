@@ -33,7 +33,7 @@ import { getGoalProgress } from './features/goals/services/goalService';
 import { completeReminder, listActiveReminders } from './features/reminders/reminderService';
 import { getRemainingQuantity, roundTo2 } from './shared/services/tradeMath';
 import { exportTradesToCsv } from './features/trades/services/exportService';
-import { ApiPricingService } from './shared/services/pricing';
+import { pricingService as sharedPricingService } from './shared/services/pricing';
 import {
   buildCurrencyFormatter,
   CURRENCY_STORAGE_KEY,
@@ -262,6 +262,39 @@ function formatTradeDate(dateIso: string): string {
     return 'Yesterday';
   }
   return dateDisplayFormatter.format(date);
+}
+
+function formatTimeAgo(date: Date): string {
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const seconds = Math.floor(diffMs / 1000);
+  const minutes = Math.floor(diffMs / 60000);
+
+  if (seconds < 60) {
+    return 'just now';
+  }
+  if (minutes === 1) {
+    return '1 min ago';
+  }
+  if (minutes < 60) {
+    return `${minutes} mins ago`;
+  }
+  const hours = Math.floor(minutes / 60);
+  if (hours === 1) {
+    return '1 hour ago';
+  }
+  return `${hours} hours ago`;
+}
+
+function isNSEMarketOpen(): boolean {
+  const now = new Date();
+  const utcMinutes = now.getUTCHours() * 60 + now.getUTCMinutes();
+  const istMinutes = (utcMinutes + 330 + 1440) % 1440;
+  const istDay = (now.getUTCDay() + (utcMinutes + 330 >= 1440 ? 1 : 0)) % 7;
+  const isWeekday = istDay >= 1 && istDay <= 5;
+  const marketOpen = 9 * 60 + 15;
+  const marketClose = 15 * 60 + 30;
+  return isWeekday && istMinutes >= marketOpen && istMinutes <= marketClose;
 }
 
 function getMetricContext(
@@ -890,10 +923,51 @@ function PortfolioValueNudgeModal({
   );
 }
 
+interface PriceDisclaimerModalProps {
+  onAccept: () => void;
+}
+
+function PriceDisclaimerModal({ onAccept }: PriceDisclaimerModalProps) {
+  return (
+    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/70 p-4">
+      <div className="w-full max-w-md rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-6">
+        <div className="mb-4 text-center text-3xl">{'\u{1F4CA}'}</div>
+        <h2 className="mb-2 text-center text-xl font-bold">About Price Data</h2>
+        <div className="mb-6 space-y-3 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-4 text-sm">
+          <div className="flex gap-3">
+            <span>{'\u{1F517}'}</span>
+            <p><strong>Source:</strong> Price data is sourced from Yahoo Finance (NSE feed)</p>
+          </div>
+          <div className="flex gap-3">
+            <span>{'\u23F1\uFE0F'}</span>
+            <p><strong>Delay:</strong> Prices may be delayed up to 15-20 minutes. Not real-time.</p>
+          </div>
+          <div className="flex gap-3">
+            <span>{'\u{1F4DD}'}</span>
+            <p><strong>Purpose:</strong> Provided for journaling and research only. Not investment advice.</p>
+          </div>
+          <div className="flex gap-3">
+            <span>{'\u26A0\uFE0F'}</span>
+            <p><strong>Risk:</strong> Trading involves substantial risk of loss. Past performance does not guarantee future results.</p>
+          </div>
+        </div>
+        <p className="mb-4 text-center text-xs text-[var(--muted)]">For live prices, please use your broker's platform.</p>
+        <button
+          type="button"
+          onClick={onAccept}
+          className="w-full rounded-lg bg-[var(--accent)] px-4 py-3 font-semibold text-[var(--bg)]"
+        >
+          I Understand, Continue
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const tradeRepo = useMemo(() => new LocalTradeRepository(), []);
   const goalRepo = useMemo(() => new LocalGoalRepository(), []);
-  const pricingService = useMemo(() => new ApiPricingService(), []);
+  const pricingService = useMemo(() => sharedPricingService, []);
 
   const [trades, setTrades] = useState<Trade[]>(() => tradeRepo.listTrades());
   const [goals, setGoals] = useState(() => goalRepo.listGoals());
@@ -926,6 +1000,15 @@ export default function App() {
   const [refreshTick, setRefreshTick] = useState(0);
   const [refreshProgress, setRefreshProgress] = useState(0);
   const [isOnline, setIsOnline] = useState(() => navigator.onLine);
+  const [showPriceDisclaimer, setShowPriceDisclaimer] = useState(false);
+  const [pendingRefresh, setPendingRefresh] = useState(false);
+  const [hasSeenPriceDisclaimer, setHasSeenPriceDisclaimer] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('hasSeenPriceDisclaimer') === 'true';
+    } catch {
+      return false;
+    }
+  });
   const [recentlyUpdatedTradeIds, setRecentlyUpdatedTradeIds] = useState<string[]>([]);
   const [priceChangesByTradeId, setPriceChangesByTradeId] = useState<Record<string, PriceChange>>({});
   const [pullStartY, setPullStartY] = useState(0);
@@ -1027,17 +1110,12 @@ export default function App() {
     if (!lastRefreshTime) {
       return 'Never';
     }
-    const diffMs = Date.now() - lastRefreshTime.getTime();
-    const minutes = Math.floor(diffMs / 60000);
-    if (minutes < 1) {
-      return 'Just now';
-    }
-    if (minutes < 60) {
-      return `${minutes}m ago`;
-    }
-    const hours = Math.floor(minutes / 60);
-    return `${hours}h ago`;
+    return formatTimeAgo(lastRefreshTime);
   }, [lastRefreshTime, refreshTick]);
+  const isMarketOpenNow = useMemo(() => {
+    void refreshTick;
+    return isNSEMarketOpen();
+  }, [refreshTick]);
 
   const dismissContextTip = (tip: ContextTipKey) => {
     setDismissedContextTips((prev) => ({ ...prev, [tip]: true }));
@@ -1546,7 +1624,7 @@ export default function App() {
     pushToast('info', mark == null ? 'Mark Price Cleared' : 'Mark Price Updated');
   };
 
-  const refreshOpenTradeMarks = useCallback(async (options?: { silentIfNoOpen?: boolean }): Promise<RefreshResult | null> => {
+  const refreshMarks = useCallback(async (options?: { silentIfNoOpen?: boolean }): Promise<RefreshResult | null> => {
     if (refreshInFlightRef.current) {
       return null;
     }
@@ -1559,7 +1637,7 @@ export default function App() {
       return null;
     }
 
-    const openTrades = trades.filter((trade) => trade.status === 'open');
+    const openTrades = trades.filter((trade) => getRemainingQuantity(trade) > 0);
     const symbols = Array.from(
       new Set(openTrades.map((trade) => trade.symbol.trim().toUpperCase()).filter(Boolean))
     );
@@ -1587,14 +1665,14 @@ export default function App() {
 
     try {
       const pricesBySymbol: Record<string, number> = {};
-      for (let index = 0; index < symbols.length; index += 1) {
-        const symbol = symbols[index];
-        const price = await pricingService.getMarkPrice(symbol);
-        if (price != null) {
+      const symbolPriceMap = await pricingService.fetchPrices(symbols);
+      symbols.forEach((symbol, index) => {
+        const price = symbolPriceMap.get(symbol);
+        if (price != null && price > 0) {
           pricesBySymbol[symbol] = roundTo2(price);
         }
         setRefreshProgress(Math.round(((index + 1) / symbols.length) * 100));
-      }
+      });
 
       const priceChanges: Record<string, PriceChange> = {};
       const updatedTradeIds: string[] = [];
@@ -1684,13 +1762,36 @@ export default function App() {
     }
   }, [isOnline, pricingService, pushToast, tradeRepo, trades]);
 
+  const handleRefreshClick = useCallback(() => {
+    if (!hasSeenPriceDisclaimer) {
+      setShowPriceDisclaimer(true);
+      setPendingRefresh(true);
+      return;
+    }
+    void refreshMarks();
+  }, [hasSeenPriceDisclaimer, refreshMarks]);
+
+  const handleDisclaimerAccept = useCallback(() => {
+    try {
+      localStorage.setItem('hasSeenPriceDisclaimer', 'true');
+    } catch {
+      // Ignore localStorage errors.
+    }
+    setHasSeenPriceDisclaimer(true);
+    setShowPriceDisclaimer(false);
+    if (pendingRefresh) {
+      setPendingRefresh(false);
+      void refreshMarks();
+    }
+  }, [pendingRefresh, refreshMarks]);
+
   useEffect(() => {
     if (!autoRefreshMarks || hasDoneInitialAutoRefresh || !isOnline) {
       return;
     }
     setHasDoneInitialAutoRefresh(true);
-    void refreshOpenTradeMarks({ silentIfNoOpen: true });
-  }, [autoRefreshMarks, hasDoneInitialAutoRefresh, isOnline, refreshOpenTradeMarks]);
+    void refreshMarks({ silentIfNoOpen: true });
+  }, [autoRefreshMarks, hasDoneInitialAutoRefresh, isOnline, refreshMarks]);
 
   useEffect(() => {
     if (!autoRefreshMarks || !isOnline) {
@@ -1705,11 +1806,11 @@ export default function App() {
       if (refreshInFlightRef.current) {
         return;
       }
-      void refreshOpenTradeMarks({ silentIfNoOpen: true });
+      void refreshMarks({ silentIfNoOpen: true });
     }, 5 * 60 * 1000);
 
     return () => window.clearInterval(intervalId);
-  }, [autoRefreshMarks, isOnline, refreshOpenTradeMarks, trades]);
+  }, [autoRefreshMarks, isOnline, refreshMarks, trades]);
 
   const signInWithGoogle = async () => {
     setIsSigningInWithGoogle(true);
@@ -1996,7 +2097,7 @@ export default function App() {
     setPullStartY(0);
     setPullDistance(0);
     if (shouldRefresh) {
-      void refreshOpenTradeMarks();
+      handleRefreshClick();
     }
   };
 
@@ -2223,7 +2324,7 @@ export default function App() {
 
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'r') {
         event.preventDefault();
-        void refreshOpenTradeMarks();
+        handleRefreshClick();
         return;
       }
 
@@ -2251,7 +2352,7 @@ export default function App() {
 
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [filteredTrades, handleExportTrades, refreshOpenTradeMarks]);
+  }, [filteredTrades, handleExportTrades, handleRefreshClick]);
 
   const analytics = useMemo(() => buildAnalyticsSummary(trades, useUnrealized), [trades, useUnrealized]);
 
@@ -2362,6 +2463,11 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[var(--bg)] pb-28 text-[var(--text)] md:pb-8">
+      {!isOnline ? (
+        <div className="bg-[var(--negative)] px-4 py-2 text-center text-sm font-medium text-white">
+          {'\u26A0\uFE0F'} No internet connection - Price updates unavailable
+        </div>
+      ) : null}
       <div className="mx-auto max-w-7xl space-y-4 px-4 py-4">
         <header className="sticky top-0 z-30 rounded-2xl border border-[var(--border)] bg-[linear-gradient(140deg,rgba(37,99,235,0.16),rgba(17,24,39,0.92)_35%,rgba(15,23,42,0.95))] p-3 shadow-[var(--shadow-card)] backdrop-blur">
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -2876,16 +2982,16 @@ export default function App() {
                   </div>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
+                  {!isMarketOpenNow ? <span className="text-xs text-[var(--muted)]">Market closed • Prices may be stale</span> : null}
                   <button
                     type="button"
-                    onClick={() => {
-                      void refreshOpenTradeMarks();
-                    }}
+                    onClick={handleRefreshClick}
                     disabled={isRefreshingMarks || !isOnline}
-                    className="min-h-11 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2.5 py-1.5 text-xs disabled:opacity-60"
+                    title={!isOnline ? 'No internet connection' : 'Refresh prices'}
+                    className="min-h-11 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2.5 py-1.5 text-xs disabled:cursor-not-allowed disabled:opacity-60"
                   >
                     <RefreshCw size={13} className={`mr-1 inline ${isRefreshingMarks ? 'animate-spin' : ''}`} />
-                    {isRefreshingMarks ? 'Refreshing' : 'Refresh'}
+                    {isRefreshingMarks ? 'Refreshing...' : 'Refresh Marks'}
                   </button>
                   <button
                     type="button"
@@ -2926,9 +3032,7 @@ export default function App() {
                   <div className="mt-2 flex gap-2">
                     <button
                       type="button"
-                      onClick={() => {
-                        void refreshOpenTradeMarks();
-                      }}
+                      onClick={handleRefreshClick}
                       className="min-h-11 rounded-lg bg-[var(--accent)] px-3 py-2 text-sm font-semibold text-black"
                     >
                       Try Again
@@ -3423,6 +3527,16 @@ export default function App() {
                 <h3 className="mb-2 font-semibold">About</h3>
                 <p className="text-sm text-[var(--muted)]">Trading Journal Pro v1.0.0</p>
               </div>
+
+              <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-4">
+                <h3 className="mb-2 text-sm font-semibold">{'\u{1F4CA}'} Price Data Information</h3>
+                <div className="space-y-2 text-xs text-[var(--muted)]">
+                  <p><span className="font-medium text-[var(--text)]">Source:</span> Price data sourced from Yahoo Finance (NSE feed).</p>
+                  <p><span className="font-medium text-[var(--text)]">Delay:</span> Price updates are near real-time with up to 15-20 minute delay.</p>
+                  <p><span className="font-medium text-[var(--text)]">Purpose:</span> Data provided for journaling and research purposes only. Not intended for real-time trading decisions.</p>
+                  <p><span className="font-medium text-[var(--text)]">Risk Warning:</span> Please be aware of the risks involved in trading and seek independent advice if necessary.</p>
+                </div>
+              </div>
             </div>
           )}
         </section>
@@ -3518,6 +3632,8 @@ export default function App() {
           </div>
         </div>
       ) : null}
+
+      {showPriceDisclaimer ? <PriceDisclaimerModal onAccept={handleDisclaimerAccept} /> : null}
 
       {isRefreshingMarks ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/20 backdrop-blur-sm">

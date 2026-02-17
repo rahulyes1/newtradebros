@@ -1,7 +1,16 @@
 ﻿import { useMemo, useState, type FormEvent } from 'react';
-import { X } from 'lucide-react';
+import { RefreshCw, X } from 'lucide-react';
 import type { CreateOpenTradeInput, Trade, TradeDirection, UpdateTradeInput } from '../../../shared/types/trade';
 import { CUSTOM_STRATEGY_VALUE, STRATEGY_PRESETS, type CurrencyCode } from '../../../shared/config/tradingOptions';
+import { pricingService } from '../../../shared/services/pricing';
+
+const POPULAR_NSE_SYMBOLS = [
+  'RELIANCE', 'TCS', 'HDFCBANK', 'INFY', 'HINDUNILVR',
+  'ICICIBANK', 'KOTAKBANK', 'SBIN', 'BHARTIARTL', 'ITC',
+  'AXISBANK', 'WIPRO', 'LT', 'ASIANPAINT', 'MARUTI',
+  'TITAN', 'BAJFINANCE', 'NESTLEIND', 'TECHM', 'SUNPHARMA',
+  'TATAMOTORS', 'TATASTEEL', 'ULTRACEMCO', 'POWERGRID', 'NTPC',
+];
 
 export type TradeFormPayload =
   | {
@@ -120,7 +129,51 @@ export default function TradeFormModal({
   onSubmit,
 }: TradeFormModalProps) {
   const [state, setState] = useState<TradeFormState>(() => emptyState(trade, initialValues));
+  const [isValidatingSymbol, setIsValidatingSymbol] = useState(false);
+  const [symbolError, setSymbolError] = useState<string | null>(null);
+  const [symbolPrice, setSymbolPrice] = useState<number | null>(null);
   const isEdit = Boolean(trade);
+
+  const formatCurrencyValue = useMemo(
+    () => new Intl.NumberFormat(undefined, { style: 'currency', currency, maximumFractionDigits: 2 }),
+    [currency]
+  );
+
+  const symbolSuggestions = useMemo(() => {
+    const query = state.symbol.trim().toUpperCase();
+    if (query.length < 2) {
+      return [];
+    }
+    return POPULAR_NSE_SYMBOLS.filter((symbol) => symbol.startsWith(query) && symbol !== query).slice(0, 5);
+  }, [state.symbol]);
+
+  const validateSymbol = async (symbol: string) => {
+    const normalized = symbol.trim().toUpperCase();
+    if (!normalized || normalized.length < 2) {
+      setSymbolError(null);
+      setSymbolPrice(null);
+      return;
+    }
+
+    setIsValidatingSymbol(true);
+    setSymbolError(null);
+
+    try {
+      const result = await pricingService.fetchPrice(normalized);
+      if (result) {
+        setSymbolPrice(result.price);
+        setSymbolError(null);
+      } else {
+        setSymbolPrice(null);
+        setSymbolError(`"${normalized}" not found on NSE. Check symbol and try again.`);
+      }
+    } catch {
+      setSymbolPrice(null);
+      setSymbolError('Could not validate symbol. Check your internet connection.');
+    } finally {
+      setIsValidatingSymbol(false);
+    }
+  };
 
   const parsed = useMemo(() => {
     const entryPrice = Number.parseFloat(state.entryPrice);
@@ -285,14 +338,60 @@ export default function TradeFormModal({
             </label>
             <label className="space-y-1 text-sm">
               <span className="text-label">Symbol</span>
-              <input
-                type="text"
-                value={state.symbol}
-                onChange={(event) => setState((prev) => ({ ...prev, symbol: event.target.value.toUpperCase() }))}
-                className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface-2)] h-11 px-3 text-[var(--text)] outline-none focus:border-[var(--accent)]"
-                placeholder="AAPL"
-                required
-              />
+              <div className="relative">
+                <input
+                  type="text"
+                  value={state.symbol}
+                  onChange={(event) => {
+                    const nextSymbol = event.target.value.toUpperCase();
+                    setState((prev) => ({ ...prev, symbol: nextSymbol }));
+                    setSymbolError(null);
+                    setSymbolPrice(null);
+                  }}
+                  onBlur={() => {
+                    void validateSymbol(state.symbol);
+                  }}
+                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface-2)] h-11 px-3 text-[var(--text)] uppercase outline-none focus:border-[var(--accent)]"
+                  placeholder="e.g. RELIANCE, TCS, INFY"
+                  required
+                />
+                {symbolSuggestions.length > 0 && state.symbol.trim().length >= 2 ? (
+                  <div className="absolute left-0 right-0 top-full z-10 mt-1 rounded-lg border border-[var(--border)] bg-[var(--surface)] shadow-lg">
+                    {symbolSuggestions.map((suggestedSymbol) => (
+                      <button
+                        key={suggestedSymbol}
+                        type="button"
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={() => {
+                          setState((prev) => ({ ...prev, symbol: suggestedSymbol }));
+                          setSymbolError(null);
+                          setSymbolPrice(null);
+                          void validateSymbol(suggestedSymbol);
+                        }}
+                        className="flex w-full items-center px-3 py-2 text-left text-sm hover:bg-[var(--surface-2)]"
+                      >
+                        {suggestedSymbol}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+              {isValidatingSymbol ? (
+                <div className="mt-1 flex items-center gap-1 text-xs text-[var(--muted)]">
+                  <RefreshCw size={10} className="animate-spin" />
+                  Checking symbol on NSE...
+                </div>
+              ) : null}
+              {symbolPrice != null && !isValidatingSymbol ? (
+                <div className="mt-1 text-xs text-[var(--positive)]">
+                  {'\u2713'} Found on NSE • Current price: {formatCurrencyValue.format(symbolPrice)}
+                </div>
+              ) : null}
+              {symbolError && !isValidatingSymbol ? (
+                <div className="mt-1 text-xs text-[var(--negative)]">
+                  {'\u2717'} {symbolError}
+                </div>
+              ) : null}
             </label>
             <label className="space-y-1 text-sm">
               <span className="text-label">Direction</span>

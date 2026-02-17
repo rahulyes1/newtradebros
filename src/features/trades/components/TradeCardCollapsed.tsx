@@ -64,6 +64,12 @@ export default function TradeCardCollapsed({
         <p className="text-tertiary mt-1 text-numeric">
           {formatCurrency(trade.entryPrice)} x {trade.quantity.toFixed(2)}
         </p>
+        {trade.markPrice != null ? (
+          <div className="mt-1 flex items-center gap-1">
+            <span className="text-tertiary-sm text-numeric">Mark: {formatCurrency(trade.markPrice)}</span>
+            <span className="rounded bg-[var(--surface-3)] px-1.5 py-0.5 text-[10px] text-[var(--muted)]">~15min delay</span>
+          </div>
+        ) : null}
       </div>
       <div className="shrink-0 text-right">
         <p className={`text-primary-sm text-numeric leading-none ${pnlClass(trade.totalPnl)}`}>

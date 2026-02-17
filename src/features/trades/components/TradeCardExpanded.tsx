@@ -118,6 +118,12 @@ export default function TradeCardExpanded({
 
       <div className="my-3 border-t border-[var(--border)] pt-3">
         <p className="text-label mb-1">Position Details</p>
+        {trade.markPrice != null ? (
+          <div className="mb-1 flex items-center gap-1">
+            <span className="text-tertiary-sm text-numeric">Mark: {formatCurrency(trade.markPrice)}</span>
+            <span className="rounded bg-[var(--surface-3)] px-1.5 py-0.5 text-[10px] text-[var(--muted)]">~15min delay</span>
+          </div>
+        ) : null}
         <p className="text-tertiary">
           * Position Value: <span className="text-secondary-sm text-numeric">{formatCurrency(positionValue)}</span>
         </p>
