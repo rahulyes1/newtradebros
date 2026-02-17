@@ -2479,7 +2479,7 @@ export default function App() {
                 className="truncate text-base font-semibold tracking-tight text-[var(--text-strong)] md:text-lg"
                 style={{ fontFamily: 'var(--font-display)' }}
               >
-                Trading Journal Pro
+                Trading GF
               </h1>
             </div>
             <div className="flex items-center gap-2">
@@ -3525,7 +3525,7 @@ export default function App() {
 
               <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-3">
                 <h3 className="mb-2 font-semibold">About</h3>
-                <p className="text-sm text-[var(--muted)]">Trading Journal Pro v1.0.0</p>
+                <p className="text-sm text-[var(--muted)]">Trading GF v1.0.0</p>
               </div>
 
               <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-4">

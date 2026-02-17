@@ -162,7 +162,7 @@ function WelcomeStep({
           <CandlestickChart size={34} className="text-[var(--accent)]" />
         </div>
         <h2 id="onboarding-step-1-title" className="font-[var(--font-display)] text-2xl font-semibold text-[var(--text)] sm:text-[1.75rem]">
-          Welcome to Trading Journal Pro
+          Welcome to Trading GF
         </h2>
         <p className="mt-2 text-sm text-[var(--muted)]">
           Track trades <span className="text-[var(--accent)]">{'\u2022'}</span> Analyze performance{' '}

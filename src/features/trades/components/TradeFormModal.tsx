@@ -1,4 +1,4 @@
-﻿import { useMemo, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { RefreshCw, X } from 'lucide-react';
 import type { CreateOpenTradeInput, Trade, TradeDirection, UpdateTradeInput } from '../../../shared/types/trade';
 import { CUSTOM_STRATEGY_VALUE, STRATEGY_PRESETS, type CurrencyCode } from '../../../shared/config/tradingOptions';
@@ -49,6 +49,13 @@ interface TradeFormState {
   initialExitQuantity: string;
   initialExitFees: string;
   initialExitNote: string;
+}
+
+interface SymbolSuggestion {
+  symbol: string;
+  yahooSymbol: string;
+  name: string;
+  exchange: string;
 }
 
 function todayIso(): string {
@@ -132,6 +139,8 @@ export default function TradeFormModal({
   const [isValidatingSymbol, setIsValidatingSymbol] = useState(false);
   const [symbolError, setSymbolError] = useState<string | null>(null);
   const [symbolPrice, setSymbolPrice] = useState<number | null>(null);
+  const [liveSuggestions, setLiveSuggestions] = useState<SymbolSuggestion[]>([]);
+  const [isLoadingSuggestions, setIsLoadingSuggestions] = useState(false);
   const isEdit = Boolean(trade);
 
   const formatCurrencyValue = useMemo(
@@ -139,12 +148,67 @@ export default function TradeFormModal({
     [currency]
   );
 
-  const symbolSuggestions = useMemo(() => {
+  const fallbackSuggestions = useMemo(() => {
     const query = state.symbol.trim().toUpperCase();
     if (query.length < 2) {
       return [];
     }
-    return POPULAR_NSE_SYMBOLS.filter((symbol) => symbol.startsWith(query) && symbol !== query).slice(0, 5);
+    return POPULAR_NSE_SYMBOLS
+      .filter((symbol) => symbol.startsWith(query) && symbol !== query)
+      .slice(0, 5)
+      .map((symbol) => ({
+        symbol,
+        yahooSymbol: `${symbol}.NS`,
+        name: symbol,
+        exchange: 'NSE',
+      }));
+  }, [state.symbol]);
+
+  const symbolSuggestions = useMemo(
+    () => (liveSuggestions.length > 0 ? liveSuggestions : fallbackSuggestions),
+    [fallbackSuggestions, liveSuggestions]
+  );
+
+  useEffect(() => {
+    const query = state.symbol.trim().toUpperCase();
+    if (query.length < 2) {
+      setLiveSuggestions([]);
+      setIsLoadingSuggestions(false);
+      return;
+    }
+
+    const controller = new AbortController();
+    const timer = window.setTimeout(async () => {
+      setIsLoadingSuggestions(true);
+      try {
+        const apiBase = window.location.hostname === 'localhost' ? 'http://localhost:3000' : '';
+        const response = await fetch(`${apiBase}/api/symbols?q=${encodeURIComponent(query)}`, { signal: controller.signal });
+        if (!response.ok) {
+          setLiveSuggestions([]);
+          return;
+        }
+        const payload = (await response.json()) as { suggestions?: SymbolSuggestion[] };
+        const suggestions = Array.isArray(payload.suggestions) ? payload.suggestions : [];
+        setLiveSuggestions(
+          suggestions
+            .filter((item) => typeof item.symbol === 'string' && item.symbol.length > 0)
+            .slice(0, 8)
+        );
+      } catch {
+        if (!controller.signal.aborted) {
+          setLiveSuggestions([]);
+        }
+      } finally {
+        if (!controller.signal.aborted) {
+          setIsLoadingSuggestions(false);
+        }
+      }
+    }, 250);
+
+    return () => {
+      controller.abort();
+      window.clearTimeout(timer);
+    };
   }, [state.symbol]);
 
   const validateSymbol = async (symbol: string) => {
@@ -359,23 +423,29 @@ export default function TradeFormModal({
                   <div className="absolute left-0 right-0 top-full z-10 mt-1 rounded-lg border border-[var(--border)] bg-[var(--surface)] shadow-lg">
                     {symbolSuggestions.map((suggestedSymbol) => (
                       <button
-                        key={suggestedSymbol}
+                        key={suggestedSymbol.yahooSymbol}
                         type="button"
                         onMouseDown={(event) => event.preventDefault()}
                         onClick={() => {
-                          setState((prev) => ({ ...prev, symbol: suggestedSymbol }));
+                          setState((prev) => ({ ...prev, symbol: suggestedSymbol.symbol }));
                           setSymbolError(null);
                           setSymbolPrice(null);
-                          void validateSymbol(suggestedSymbol);
+                          void validateSymbol(suggestedSymbol.symbol);
                         }}
-                        className="flex w-full items-center px-3 py-2 text-left text-sm hover:bg-[var(--surface-2)]"
+                        className="flex w-full flex-col items-start px-3 py-2 text-left text-sm hover:bg-[var(--surface-2)]"
                       >
-                        {suggestedSymbol}
+                        <span>{suggestedSymbol.symbol}</span>
+                        <span className="text-xs text-[var(--muted)]">
+                          {suggestedSymbol.name}{suggestedSymbol.exchange ? ` • ${suggestedSymbol.exchange}` : ''}
+                        </span>
                       </button>
                     ))}
                   </div>
                 ) : null}
               </div>
+              {isLoadingSuggestions && state.symbol.trim().length >= 2 ? (
+                <div className="mt-1 text-xs text-[var(--muted)]">Fetching suggestions...</div>
+              ) : null}
               {isValidatingSymbol ? (
                 <div className="mt-1 flex items-center gap-1 text-xs text-[var(--muted)]">
                   <RefreshCw size={10} className="animate-spin" />
@@ -592,5 +662,6 @@ export default function TradeFormModal({
     </div>
   );
 }
+
 
 

@@ -1,6 +1,6 @@
-# Trading Journal Pro
+# Trading GF
 
-Trading Journal Pro is a React + TypeScript + Vite app for tracking open/closed trades, exits, performance, goals, and insights.
+Trading GF is a React + TypeScript + Vite app for tracking open/closed trades, exits, performance, goals, and insights.
 
 ## Typography System
 
