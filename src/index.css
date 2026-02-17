@@ -237,3 +237,12 @@ button:active {
   transform: translateY(-2px);
   box-shadow: 0 8px 16px rgba(0, 0, 0, 0.2);
 }
+
+.insight-card {
+  background: rgba(125, 211, 252, 0.1);
+  border: 1px solid var(--border);
+  border-left: 3px solid;
+  border-radius: 12px;
+  padding: 16px;
+  margin-bottom: 16px;
+}

@@ -1,14 +1,12 @@
-﻿import { useEffect, useMemo, useRef, useState } from 'react';
+﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { User } from '@supabase/supabase-js';
 import { Bar, BarChart, CartesianGrid, Cell, Line, LineChart, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import {
   AlarmClockCheck,
   BarChart3,
   CandlestickChart,
-  Clock3,
   Download,
   Edit2,
-  Globe2,
   Home,
   Inbox,
   Info,
@@ -20,10 +18,9 @@ import {
   RefreshCw,
   Search,
   Settings,
-  ShieldCheck,
-  SlidersHorizontal,
-  Target,
+  TrendingUp,
   Trash2,
+  User as UserIcon,
   Wallet,
   X,
 } from 'lucide-react';
@@ -58,11 +55,25 @@ import EmptyState from './shared/components/EmptyState';
 import { supabase } from './supabaseClient';
 import { Toaster, toast } from 'sonner';
 
-type Tab = 'trades' | 'history' | 'overview' | 'analytics' | 'goals' | 'settings';
-type FilterType = 'all' | 'wins' | 'losses';
+type Tab = 'dashboard' | 'trades' | 'insights' | 'profile';
+type FilterType = 'all' | 'wins' | 'losses' | 'open' | 'closed';
 type TradeViewMode = 'card' | 'compact';
-type ContextTipKey = 'overview' | 'trades' | 'analytics';
+type ContextTipKey = 'dashboard' | 'trades' | 'insights';
 type MetricContextTone = 'success' | 'warning' | 'muted';
+type InsightType = 'success' | 'warning' | 'info' | 'tip';
+
+interface InsightAction {
+  label: string;
+  onClick: () => void;
+}
+
+interface InsightCardProps {
+  id: string;
+  type: InsightType;
+  title: string;
+  content: string;
+  action?: InsightAction;
+}
 
 const C = {
   grid: '#283243',
@@ -93,9 +104,12 @@ const HAS_SKIPPED_PORTFOLIO_VALUE_STORAGE_KEY = 'hasSkippedPortfolioValue';
 const DISMISSED_PORTFOLIO_BANNER_STORAGE_KEY = 'dismissedPortfolioBanner';
 const DISMISSED_AFTER_FIVE_TRADES_STORAGE_KEY = 'dismissedAfter5Trades';
 const PORTFOLIO_NUDGE_DISMISS_DATE_STORAGE_KEY = 'portfolioNudgeDismissDate';
-const OVERVIEW_TOOLTIP_DISMISSED_KEY = 'tooltipDismissed.overview';
+const DASHBOARD_TOOLTIP_DISMISSED_KEY = 'tooltipDismissed.dashboard';
 const TRADES_TOOLTIP_DISMISSED_KEY = 'tooltipDismissed.trades';
-const ANALYTICS_TOOLTIP_DISMISSED_KEY = 'tooltipDismissed.analytics';
+const INSIGHTS_TOOLTIP_DISMISSED_KEY = 'tooltipDismissed.insights';
+const CURRENT_TAB_STORAGE_KEY = 'currentTab';
+const TRADE_VIEW_MODE_STORAGE_KEY = 'tradeViewMode';
+const DISMISSED_INSIGHTS_STORAGE_KEY = 'dismissedInsights';
 const GOAL_LABELS: Record<GoalType, string> = {
   monthly_pnl: 'Monthly P&L',
   monthly_win_rate: 'Monthly Win Rate',
@@ -331,6 +345,385 @@ function metricContextClass(tone: MetricContextTone): string {
   return 'text-[var(--muted)]';
 }
 
+function calculateWinRate(trades: Trade[]): number {
+  const closed = trades.filter((trade) => trade.status === 'closed');
+  if (closed.length === 0) {
+    return 0;
+  }
+  const wins = closed.filter((trade) => trade.realizedPnl > 0).length;
+  return (wins / closed.length) * 100;
+}
+
+function getTradesFromLastNDays(trades: Trade[], days: number): Trade[] {
+  const cutoff = new Date();
+  cutoff.setHours(0, 0, 0, 0);
+  cutoff.setDate(cutoff.getDate() - days + 1);
+  return trades.filter((trade) => parseIsoDate(trade.date) >= cutoff);
+}
+
+function calculateAvgWinSize(trades: Trade[]): number {
+  const wins = trades.filter((trade) => trade.status === 'closed' && trade.realizedPnl > 0);
+  if (wins.length === 0) {
+    return 0;
+  }
+  return wins.reduce((sum, trade) => sum + trade.realizedPnl, 0) / wins.length;
+}
+
+function calculateAvgLossSize(trades: Trade[]): number {
+  const losses = trades.filter((trade) => trade.status === 'closed' && trade.realizedPnl < 0);
+  if (losses.length === 0) {
+    return 0;
+  }
+  return losses.reduce((sum, trade) => sum + trade.realizedPnl, 0) / losses.length;
+}
+
+function calculateDailyBalances(trades: Trade[]): number[] {
+  let running = 0;
+  return [...trades]
+    .sort((a, b) => a.date.localeCompare(b.date))
+    .map((trade) => {
+      running += trade.realizedPnl;
+      return roundTo2(running);
+    });
+}
+
+function generatePnLInsight(
+  trades: Trade[],
+  overallWinRate: number,
+  portfolioValue: number,
+  totalPnl: number,
+  formatCurrency: (value: number) => string,
+  onReviewLosses: () => void
+): InsightCardProps | null {
+  const closed = trades.filter((trade) => trade.status === 'closed');
+  const recentClosed = closed.slice(-10);
+  const recentWinRate = calculateWinRate(recentClosed);
+
+  if (recentClosed.length >= 5 && recentWinRate > overallWinRate + 10) {
+    return {
+      id: 'pnl-performance-improving',
+      type: 'success',
+      title: 'Performance Improving',
+      content: `Your last ${recentClosed.length} closed trades are winning ${recentWinRate.toFixed(1)}%, which is ${(
+        recentWinRate - overallWinRate
+      ).toFixed(1)}% above your baseline. Keep following the same setup discipline.`,
+    };
+  }
+
+  if (recentClosed.length >= 5 && recentWinRate < overallWinRate - 10) {
+    return {
+      id: 'pnl-recent-slump',
+      type: 'warning',
+      title: 'Recent Slump Detected',
+      content: `Recent win rate is ${recentWinRate.toFixed(1)}% vs your ${overallWinRate.toFixed(1)}% average. Review recent losses and tighten entries.`,
+      action: {
+        label: 'Review Recent Losses',
+        onClick: onReviewLosses,
+      },
+    };
+  }
+
+  if (portfolioValue > 0) {
+    const balances = calculateDailyBalances(closed);
+    if (balances.length > 1) {
+      const currentBalance = portfolioValue + totalPnl;
+      const peakBalance = portfolioValue + Math.max(...balances, 0);
+      const drawdown = peakBalance > 0 ? ((peakBalance - currentBalance) / peakBalance) * 100 : 0;
+      if (drawdown > 10) {
+        return {
+          id: 'pnl-drawdown-alert',
+          type: 'warning',
+          title: 'Drawdown Alert',
+          content: `You are ${drawdown.toFixed(1)}% below your equity peak. Consider reducing size and reviewing your highest-conviction setups.`,
+        };
+      }
+    }
+  }
+
+  const lastMonthClosed = getTradesFromLastNDays(closed, 30);
+  const monthlyRealized = lastMonthClosed.reduce((sum, trade) => sum + trade.realizedPnl, 0);
+  if (monthlyRealized > 0 && lastMonthClosed.length >= 20) {
+    return {
+      id: 'pnl-strong-month',
+      type: 'success',
+      title: 'Strong Monthly Performance',
+      content: `You realized ${formatCurrency(monthlyRealized)} across ${lastMonthClosed.length} closed trades in the last 30 days. Consistency is compounding.`,
+    };
+  }
+
+  return null;
+}
+
+function generateWinRateInsight(
+  trades: Trade[],
+  winRate: number,
+  formatCurrency: (value: number) => string,
+  onViewWinningTrades: () => void
+): InsightCardProps | null {
+  const closed = trades.filter((trade) => trade.status === 'closed');
+  const totalClosed = closed.length;
+
+  if (totalClosed < 10) {
+    return {
+      id: 'winrate-build-track-record',
+      type: 'info',
+      title: 'Build Your Track Record',
+      content: `You have ${totalClosed} closed trades. Reach 10+ closed trades for a more reliable win-rate signal.`,
+    };
+  }
+
+  if (winRate >= 65) {
+    return {
+      id: 'winrate-excellent',
+      type: 'success',
+      title: 'Excellent Win Rate',
+      content: `Your ${winRate.toFixed(1)}% win rate is strong. Keep protecting gains with disciplined stop-loss and position sizing.`,
+    };
+  }
+
+  if (winRate < 45) {
+    return {
+      id: 'winrate-needs-work',
+      type: 'warning',
+      title: 'Win Rate Needs Improvement',
+      content: `Win rate is ${winRate.toFixed(1)}%. Review entry timing and compare losers against your best-performing setups.`,
+      action: {
+        label: 'View Winning Trades',
+        onClick: onViewWinningTrades,
+      },
+    };
+  }
+
+  const avgWin = calculateAvgWinSize(closed);
+  const avgLoss = Math.abs(calculateAvgLossSize(closed));
+  if (avgWin > 0 && avgLoss > 0 && avgWin < avgLoss * 1.5) {
+    return {
+      id: 'winrate-risk-reward-tip',
+      type: 'tip',
+      title: 'Improve Risk/Reward',
+      content: `Average win is ${formatCurrency(avgWin)} while average loss is ${formatCurrency(avgLoss)}. Aim for winners that are at least 2x your losses.`,
+    };
+  }
+
+  return null;
+}
+
+function generateTradingFrequencyInsight(trades: Trade[]): InsightCardProps | null {
+  const last7Days = getTradesFromLastNDays(trades, 7);
+  const last30Days = getTradesFromLastNDays(trades, 30);
+
+  if (last7Days.length > 20) {
+    return {
+      id: 'frequency-overtrading',
+      type: 'warning',
+      title: 'Possible Overtrading',
+      content: `${last7Days.length} trades in 7 days is a high pace. Overtrading increases emotional decisions. Prioritize setup quality over activity.`,
+    };
+  }
+
+  if (last30Days.length >= 10 && last30Days.length <= 40) {
+    const recentWinRate = calculateWinRate(last30Days);
+    if (recentWinRate >= 55) {
+      return {
+        id: 'frequency-balanced',
+        type: 'success',
+        title: 'Disciplined Trading Frequency',
+        content: `You are averaging ${(last30Days.length / 30).toFixed(1)} trades/day with ${recentWinRate.toFixed(1)}% wins over 30 days. This cadence looks sustainable.`,
+      };
+    }
+  }
+
+  if (trades.length >= 5 && last30Days.length < 3) {
+    return {
+      id: 'frequency-low-activity',
+      type: 'info',
+      title: 'Low Trading Activity',
+      content: `Only ${last30Days.length} trades in the last 30 days. If this is intentional selectivity, keep it. If not, review your setup criteria.`,
+    };
+  }
+
+  return null;
+}
+
+function generateRiskManagementInsight(
+  trades: Trade[],
+  portfolioValue: number,
+  onViewOpenTrades: () => void
+): InsightCardProps | null {
+  const openTrades = trades.filter((trade) => trade.status === 'open');
+  if (portfolioValue <= 0) {
+    return {
+      id: 'risk-set-portfolio',
+      type: 'info',
+      title: 'Set Portfolio Value',
+      content: 'Add your portfolio value to unlock exposure-based risk insights.',
+    };
+  }
+
+  const totalExposure = openTrades.reduce((sum, trade) => sum + trade.entryPrice * getRemainingQuantity(trade), 0);
+  const exposurePercent = (totalExposure / portfolioValue) * 100;
+
+  if (exposurePercent > 80) {
+    return {
+      id: 'risk-very-high-exposure',
+      type: 'warning',
+      title: 'Very High Risk Exposure',
+      content: `${exposurePercent.toFixed(1)}% of portfolio is currently deployed. Reduce concentration risk before adding new positions.`,
+      action: {
+        label: 'View Open Positions',
+        onClick: onViewOpenTrades,
+      },
+    };
+  }
+
+  if (openTrades.length === 0 && trades.length > 0) {
+    return {
+      id: 'risk-no-open-positions',
+      type: 'info',
+      title: 'No Active Positions',
+      content: 'You are flat right now. Use this time to review your journal and prepare high-probability setups.',
+    };
+  }
+
+  if (exposurePercent >= 20 && exposurePercent <= 50) {
+    return {
+      id: 'risk-balanced-exposure',
+      type: 'success',
+      title: 'Balanced Risk Exposure',
+      content: `${exposurePercent.toFixed(1)}% exposure leaves room for opportunities while controlling downside.`,
+    };
+  }
+
+  return null;
+}
+
+function generateStreakInsight(trades: Trade[]): InsightCardProps | null {
+  const recentClosed = trades.filter((trade) => trade.status === 'closed').slice(-10);
+  if (recentClosed.length < 3) {
+    return null;
+  }
+
+  let streakCount = 0;
+  let streakType: 'win' | 'loss' | null = null;
+  for (let i = recentClosed.length - 1; i >= 0; i -= 1) {
+    const isWin = recentClosed[i].realizedPnl > 0;
+    if (streakType == null) {
+      streakType = isWin ? 'win' : 'loss';
+      streakCount = 1;
+      continue;
+    }
+    if ((streakType === 'win' && isWin) || (streakType === 'loss' && !isWin)) {
+      streakCount += 1;
+      continue;
+    }
+    break;
+  }
+
+  if (streakCount < 3 || streakType == null) {
+    return null;
+  }
+
+  if (streakType === 'win') {
+    return {
+      id: 'streak-winning',
+      type: 'success',
+      title: `${streakCount}-Trade Winning Streak`,
+      content: `Momentum is strong. Stay disciplined and avoid increasing risk just because confidence is high.`,
+    };
+  }
+
+  return {
+    id: 'streak-losing',
+    type: 'warning',
+    title: `${streakCount} Losses In A Row`,
+    content: 'Pause and review what changed. Preserving capital and confidence is part of strategy execution.',
+  };
+}
+
+function generateBestWorstTradeInsight(trades: Trade[]): InsightCardProps | null {
+  const closed = trades.filter((trade) => trade.status === 'closed');
+  if (closed.length < 5) {
+    return null;
+  }
+
+  const best = closed.reduce((max, trade) => (trade.realizedPnl > max.realizedPnl ? trade : max), closed[0]);
+  const worst = closed.reduce((min, trade) => (trade.realizedPnl < min.realizedPnl ? trade : min), closed[0]);
+
+  const bestBase = best.entryPrice * best.quantity;
+  const worstBase = worst.entryPrice * worst.quantity;
+  if (bestBase <= 0 || worstBase <= 0) {
+    return null;
+  }
+  const bestPct = (best.realizedPnl / bestBase) * 100;
+  const worstPct = (worst.realizedPnl / worstBase) * 100;
+
+  if (Math.abs(worstPct) > Math.abs(bestPct) * 2) {
+    return {
+      id: 'best-worst-loss-dominance',
+      type: 'warning',
+      title: 'Losses Outweigh Wins',
+      content: `Worst trade (${worst.symbol} ${worstPct.toFixed(1)}%) is much larger than best win (${best.symbol} ${bestPct.toFixed(1)}%). Cut losers earlier.`,
+    };
+  }
+
+  return null;
+}
+
+function InsightCard({
+  id,
+  type,
+  title,
+  content,
+  action,
+  dismissible = false,
+  dismissed = false,
+  onDismiss,
+}: InsightCardProps & { dismissible?: boolean; dismissed?: boolean; onDismiss?: (id: string) => void }) {
+  if (dismissible && dismissed) {
+    return null;
+  }
+
+  const icons: Record<InsightType, string> = {
+    success: '??',
+    warning: '??',
+    info: '??',
+    tip: '?',
+  };
+  const colors: Record<InsightType, string> = {
+    success: 'var(--positive)',
+    warning: '#f59e0b',
+    info: 'var(--accent)',
+    tip: '#8b5cf6',
+  };
+
+  return (
+    <div className="insight-card" style={{ borderLeftColor: colors[type] }}>
+      <div className="flex items-start gap-3">
+        <span className="text-2xl">{icons[type]}</span>
+        <div className="flex-1">
+          <h4 className="mb-1 font-semibold">{title}</h4>
+          <p className="text-sm leading-relaxed text-[var(--muted)]">{content}</p>
+          {action ? (
+            <button type="button" onClick={action.onClick} className="mt-2 text-sm text-[var(--accent)] hover:underline">
+              {action.label} {'\u2192'}
+            </button>
+          ) : null}
+        </div>
+        {dismissible ? (
+          <button
+            type="button"
+            onClick={() => onDismiss?.(id)}
+            className="rounded-md p-1 text-[var(--muted)] transition hover:text-[var(--text)]"
+            aria-label="Dismiss insight"
+          >
+            <X size={14} />
+          </button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 interface PortfolioValueBannerProps {
   onSetValue: () => void;
   onDismiss: () => void;
@@ -508,7 +901,7 @@ export default function App() {
   const [showPortfolioNudgeModal, setShowPortfolioNudgeModal] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<boolean>(() => getInitialBoolean(CONFIRM_DELETE_STORAGE_KEY, true));
   const [autoRefreshMarks, setAutoRefreshMarks] = useState<boolean>(() => getInitialBoolean(AUTO_REFRESH_MARKS_STORAGE_KEY, false));
-  const [tab, setTab] = useState<Tab>('trades');
+  const [tab, setTab] = useState<Tab>('dashboard');
   const [search, setSearch] = useState('');
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
@@ -519,13 +912,31 @@ export default function App() {
   const [showForm, setShowForm] = useState(false);
   const [editTrade, setEditTrade] = useState<Trade | null>(null);
   const [manageTrade, setManageTrade] = useState<Trade | null>(null);
-  const [tradeViewMode, setTradeViewMode] = useState<TradeViewMode>('card');
+  const [tradeViewMode, setTradeViewMode] = useState<TradeViewMode>(() => {
+    try {
+      const saved = localStorage.getItem(TRADE_VIEW_MODE_STORAGE_KEY);
+      return saved === 'compact' ? 'compact' : 'card';
+    } catch {
+      return 'card';
+    }
+  });
   const [expandedTradeId, setExpandedTradeId] = useState<string | null>(null);
+  const [isEditingPortfolio, setIsEditingPortfolio] = useState(false);
+  const [showCurrencyModal, setShowCurrencyModal] = useState(false);
+  const [dismissedInsights, setDismissedInsights] = useState<string[]>(() => {
+    try {
+      const raw = localStorage.getItem(DISMISSED_INSIGHTS_STORAGE_KEY);
+      const parsed = raw ? JSON.parse(raw) : [];
+      return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string') : [];
+    } catch {
+      return [];
+    }
+  });
   const [activeContextTip, setActiveContextTip] = useState<ContextTipKey | null>(null);
   const [dismissedContextTips, setDismissedContextTips] = useState<Record<ContextTipKey, boolean>>(() => ({
-    overview: getInitialBoolean(OVERVIEW_TOOLTIP_DISMISSED_KEY, false),
+    dashboard: getInitialBoolean(DASHBOARD_TOOLTIP_DISMISSED_KEY, false),
     trades: getInitialBoolean(TRADES_TOOLTIP_DISMISSED_KEY, false),
-    analytics: getInitialBoolean(ANALYTICS_TOOLTIP_DISMISSED_KEY, false),
+    insights: getInitialBoolean(INSIGHTS_TOOLTIP_DISMISSED_KEY, false),
   }));
   const [accountUser, setAccountUser] = useState<User | null>(null);
   const [isAuthReady, setIsAuthReady] = useState(false);
@@ -541,7 +952,7 @@ export default function App() {
 
   const currencyFormatter = useMemo(() => buildCurrencyFormatter(currency), [currency]);
 
-  const formatCurrency = (value: number): string => currencyFormatter.format(roundTo2(value));
+  const formatCurrency = useCallback((value: number): string => currencyFormatter.format(roundTo2(value)), [currencyFormatter]);
   const pnl = (value: number): string => `${value >= 0 ? '+' : ''}${formatCurrency(value)}`;
   const compactNumberFormatter = useMemo(
     () => new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }),
@@ -581,22 +992,16 @@ export default function App() {
   };
 
   const tabIcon = (tabId: Tab, size = 13) => {
+    if (tabId === 'dashboard') {
+      return <Home size={size} className={TAB_ICON_CLASS} />;
+    }
     if (tabId === 'trades') {
       return <List size={size} className={TAB_ICON_CLASS} />;
     }
-    if (tabId === 'history') {
-      return <Clock3 size={size} className={TAB_ICON_CLASS} />;
+    if (tabId === 'insights') {
+      return <TrendingUp size={size} className={TAB_ICON_CLASS} />;
     }
-    if (tabId === 'overview') {
-      return <Home size={size} className={TAB_ICON_CLASS} />;
-    }
-    if (tabId === 'analytics') {
-      return <BarChart3 size={size} className={TAB_ICON_CLASS} />;
-    }
-    if (tabId === 'goals') {
-      return <Target size={size} className={TAB_ICON_CLASS} />;
-    }
-    return <Settings size={size} className={TAB_ICON_CLASS} />;
+    return <UserIcon size={size} className={TAB_ICON_CLASS} />;
   };
 
   const applyAccountMetadata = (user: User) => {
@@ -731,6 +1136,22 @@ export default function App() {
 
   useEffect(() => {
     try {
+      localStorage.setItem(TRADE_VIEW_MODE_STORAGE_KEY, tradeViewMode);
+    } catch {
+      // Ignore localStorage write errors.
+    }
+  }, [tradeViewMode]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(DISMISSED_INSIGHTS_STORAGE_KEY, JSON.stringify(dismissedInsights));
+    } catch {
+      // Ignore localStorage write errors.
+    }
+  }, [dismissedInsights]);
+
+  useEffect(() => {
+    try {
       localStorage.setItem(HAS_SKIPPED_PORTFOLIO_VALUE_STORAGE_KEY, String(hasSkippedPortfolioValue));
     } catch {
       // Ignore localStorage write errors.
@@ -794,28 +1215,62 @@ export default function App() {
 
   useEffect(() => {
     try {
-      localStorage.setItem(OVERVIEW_TOOLTIP_DISMISSED_KEY, String(dismissedContextTips.overview));
+      localStorage.setItem(DASHBOARD_TOOLTIP_DISMISSED_KEY, String(dismissedContextTips.dashboard));
       localStorage.setItem(TRADES_TOOLTIP_DISMISSED_KEY, String(dismissedContextTips.trades));
-      localStorage.setItem(ANALYTICS_TOOLTIP_DISMISSED_KEY, String(dismissedContextTips.analytics));
+      localStorage.setItem(INSIGHTS_TOOLTIP_DISMISSED_KEY, String(dismissedContextTips.insights));
     } catch {
       // Ignore localStorage write errors.
     }
   }, [dismissedContextTips]);
 
   useEffect(() => {
+    try {
+      const saved = localStorage.getItem(CURRENT_TAB_STORAGE_KEY);
+      if (!saved) {
+        return;
+      }
+      const tabMigration: Record<string, Tab> = {
+        dashboard: 'dashboard',
+        overview: 'dashboard',
+        trades: 'trades',
+        history: 'trades',
+        insights: 'insights',
+        analytics: 'insights',
+        goals: 'insights',
+        profile: 'profile',
+        settings: 'profile',
+      };
+      const nextTab = tabMigration[saved];
+      if (nextTab) {
+        setTab(nextTab);
+      }
+    } catch {
+      // Ignore localStorage read errors.
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(CURRENT_TAB_STORAGE_KEY, tab);
+    } catch {
+      // Ignore localStorage write errors.
+    }
+  }, [tab]);
+
+  useEffect(() => {
     if (needsCurrencyOnboarding) {
       return;
     }
-    if (tab === 'overview' && !dismissedContextTips.overview) {
-      setActiveContextTip('overview');
+    if (tab === 'dashboard' && !dismissedContextTips.dashboard) {
+      setActiveContextTip('dashboard');
       return;
     }
     if (tab === 'trades' && !dismissedContextTips.trades) {
       setActiveContextTip('trades');
       return;
     }
-    if (tab === 'analytics' && trades.length >= 5 && !dismissedContextTips.analytics) {
-      setActiveContextTip('analytics');
+    if (tab === 'insights' && trades.length >= 5 && !dismissedContextTips.insights) {
+      setActiveContextTip('insights');
       return;
     }
     setActiveContextTip(null);
@@ -1147,6 +1602,41 @@ export default function App() {
     }
   };
 
+  const clearAllData = () => {
+    tradeRepo.saveTrades([]);
+    setTrades([]);
+    localStorage.removeItem('goals');
+    setGoals([]);
+    setSearch('');
+    setFrom('');
+    setTo('');
+    setFlt('all');
+    setExpandedTradeId(null);
+    setTab('dashboard');
+    pushToast('success', 'All local data cleared');
+  };
+
+  const handleClearAllData = () => {
+    if (confirmDelete) {
+      toast('Clear all local trade and goal data?', {
+        description: 'This cannot be undone.',
+        duration: 7000,
+        action: {
+          label: 'Clear Data',
+          onClick: clearAllData,
+        },
+        cancel: {
+          label: 'Cancel',
+          onClick: () => {
+            // no-op
+          },
+        },
+      });
+      return;
+    }
+    clearAllData();
+  };
+
   const summary = useMemo(() => {
     const closed = trades.filter((trade) => trade.status === 'closed');
     const realized = roundTo2(trades.reduce((sum, trade) => sum + trade.realizedPnl, 0));
@@ -1286,29 +1776,34 @@ export default function App() {
     [trades]
   );
 
-  const filteredTrades = useMemo(
-    () =>
-      trades.filter((trade) => {
-        if (search && !trade.symbol.toLowerCase().includes(search.toLowerCase())) return false;
-        if (from && trade.date < from) return false;
-        if (to && trade.date > to) return false;
-        if (flt === 'wins' && trade.totalPnl <= 0) return false;
-        if (flt === 'losses' && trade.totalPnl >= 0) return false;
-        return true;
-      }),
-    [trades, search, from, to, flt]
-  );
-  const hasTradeFilters = Boolean(search || from || to || flt !== 'all');
-
-  const activeTrades = useMemo(
-    () => filteredTrades.filter((trade) => trade.status === 'open'),
-    [filteredTrades]
-  );
-
-  const historyTrades = useMemo(
-    () => filteredTrades.filter((trade) => trade.status === 'closed'),
-    [filteredTrades]
-  );
+  const filteredTrades = useMemo(() => {
+    let result = [...trades].sort((a, b) => b.date.localeCompare(a.date) || b.updatedAt.localeCompare(a.updatedAt));
+    if (search) {
+      const query = search.toLowerCase();
+      result = result.filter((trade) => trade.symbol.toLowerCase().includes(query));
+    }
+    if (from) {
+      result = result.filter((trade) => trade.date >= from);
+    }
+    if (to) {
+      result = result.filter((trade) => trade.date <= to);
+    }
+    if (flt === 'wins') {
+      result = result.filter((trade) => trade.status === 'closed' && trade.realizedPnl > 0);
+    } else if (flt === 'losses') {
+      result = result.filter((trade) => trade.status === 'closed' && trade.realizedPnl < 0);
+    } else if (flt === 'open') {
+      result = result.filter((trade) => trade.status === 'open');
+    } else if (flt === 'closed') {
+      result = result.filter((trade) => trade.status === 'closed');
+    }
+    return result;
+  }, [trades, search, from, to, flt]);
+  const activeTrades = useMemo(() => trades.filter((trade) => trade.status === 'open'), [trades]);
+  const closedTrades = useMemo(() => trades.filter((trade) => trade.status === 'closed'), [trades]);
+  const filteredOpenTrades = useMemo(() => filteredTrades.filter((trade) => trade.status === 'open'), [filteredTrades]);
+  const winCount = useMemo(() => closedTrades.filter((trade) => trade.realizedPnl > 0).length, [closedTrades]);
+  const lossCount = useMemo(() => closedTrades.filter((trade) => trade.realizedPnl < 0).length, [closedTrades]);
 
   const analytics = useMemo(() => buildAnalyticsSummary(trades, useUnrealized), [trades, useUnrealized]);
 
@@ -1328,17 +1823,31 @@ export default function App() {
     [lineData]
   );
 
-  const monthData = useMemo(() => {
-    const monthly = new Map<string, { month: string; realized: number; provisional: number }>();
-    trades.forEach((trade) => {
-      const key = trade.date.slice(0, 7);
-      const curr = monthly.get(key) ?? { month: key, realized: 0, provisional: 0 };
-      curr.realized += trade.realizedPnl;
-      curr.provisional += trade.totalPnl;
-      monthly.set(key, curr);
-    });
-    return Array.from(monthly.values()).sort((a, b) => a.month.localeCompare(b.month));
+  const activityData = useMemo(() => {
+    const days = 14;
+    const result: Array<{ day: string; trades: number }> = [];
+    for (let index = days - 1; index >= 0; index -= 1) {
+      const date = new Date();
+      date.setHours(0, 0, 0, 0);
+      date.setDate(date.getDate() - index);
+      const key = localIsoDate(date);
+      result.push({
+        day: key.slice(5),
+        trades: trades.filter((trade) => trade.date === key).length,
+      });
+    }
+    return result;
   }, [trades]);
+  const riskExposureData = useMemo(
+    () => [
+      {
+        name: 'Open Exposure',
+        percent: roundTo2(openExposure.percent),
+        fill: openExposure.percent > 80 ? C.neg : openExposure.percent > 50 ? '#f59e0b' : C.pos,
+      },
+    ],
+    [openExposure.percent]
+  );
 
   const pieData = [
     { name: 'Wins', value: summary.wins, color: C.pos },
@@ -1347,6 +1856,41 @@ export default function App() {
   const currentPeriod = periodNow();
   const periodGoals = goals.filter((goal) => goal.period === currentPeriod);
   const goalProgress = getGoalProgress(periodGoals, trades);
+  const dismissedInsightSet = useMemo(() => new Set(dismissedInsights), [dismissedInsights]);
+
+  const pnlInsight = useMemo(
+    () =>
+      generatePnLInsight(trades, summary.winRate, portfolioValue, summary.total, formatCurrency, () => {
+        setTab('trades');
+        setFlt('losses');
+      }),
+    [formatCurrency, portfolioValue, summary.total, summary.winRate, trades]
+  );
+
+  const winRateInsight = useMemo(
+    () =>
+      generateWinRateInsight(trades, summary.winRate, formatCurrency, () => {
+        setTab('trades');
+        setFlt('wins');
+      }),
+    [formatCurrency, summary.winRate, trades]
+  );
+
+  const tradingFrequencyInsight = useMemo(() => generateTradingFrequencyInsight(trades), [trades]);
+  const riskInsight = useMemo(
+    () =>
+      generateRiskManagementInsight(trades, portfolioValue, () => {
+        setTab('trades');
+        setFlt('open');
+      }),
+    [portfolioValue, trades]
+  );
+  const streakInsight = useMemo(() => generateStreakInsight(trades), [trades]);
+  const bestWorstInsight = useMemo(() => generateBestWorstTradeInsight(trades), [trades]);
+
+  const dismissInsight = (id: string) => {
+    setDismissedInsights((prev) => (prev.includes(id) ? prev : [...prev, id]));
+  };
 
   useEffect(() => {
     goalProgress.forEach((progressItem) => {
@@ -1361,23 +1905,17 @@ export default function App() {
     });
   }, [goalProgress]);
 
-  const tabs: Array<{ id: Tab; label: string; badge?: number }> = [
-    { id: 'trades', label: 'Trades', badge: summary.open || undefined },
-    { id: 'history', label: 'History', badge: trades.filter((trade) => trade.status === 'closed').length || undefined },
-    { id: 'overview', label: 'Overview', badge: reminders.length || undefined },
-    { id: 'analytics', label: 'Analytics' },
-    {
-      id: 'goals',
-      label: 'Goals',
-      badge: goalProgress.filter((goal) => goal.status === 'at_risk').length || undefined,
-    },
-    { id: 'settings', label: 'Settings' },
+  const tabs: Array<{ id: Tab; label: string; badge?: number | string }> = [
+    { id: 'dashboard', label: 'Dashboard' },
+    { id: 'trades', label: 'Trades', badge: activeTrades.length || undefined },
+    { id: 'insights', label: 'Insights' },
+    { id: 'profile', label: 'Profile', badge: accountUser ? undefined : '!' },
   ];
 
   return (
     <div className="min-h-screen bg-[var(--bg)] pb-28 text-[var(--text)] md:pb-8">
       <div className="mx-auto max-w-7xl space-y-4 px-4 py-4">
-        <header className="rounded-2xl border border-[var(--border)] bg-[linear-gradient(140deg,rgba(37,99,235,0.16),rgba(17,24,39,0.92)_35%,rgba(15,23,42,0.95))] p-3 shadow-[var(--shadow-card)]">
+        <header className="sticky top-0 z-30 rounded-2xl border border-[var(--border)] bg-[linear-gradient(140deg,rgba(37,99,235,0.16),rgba(17,24,39,0.92)_35%,rgba(15,23,42,0.95))] p-3 shadow-[var(--shadow-card)] backdrop-blur">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex min-w-0 items-center gap-2">
               <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-[color:rgba(148,163,184,0.25)] bg-[color:rgba(59,130,246,0.22)] text-[var(--accent)]">
@@ -1391,33 +1929,33 @@ export default function App() {
               </h1>
             </div>
             <div className="flex items-center gap-2">
-              <div className="rounded-lg border border-[var(--border)] bg-[color:rgba(15,23,42,0.72)] px-2.5 py-1.5 text-right">
-                <p className="text-[10px] uppercase tracking-[0.08em] text-[var(--muted)]">Portfolio</p>
-                <p className="text-sm font-semibold text-[var(--text-strong)]">{compactPortfolioValue}</p>
-              </div>
-              {accountUser ? (
-                <button
-                  onClick={() => {
-                    void signOut();
-                  }}
-                  title="Sign Out"
-                  className="flex h-9 w-9 items-center justify-center rounded-full border border-[color:rgba(16,185,129,0.5)] bg-[linear-gradient(140deg,rgba(16,185,129,0.32),rgba(15,23,42,0.9))] text-[color:rgba(110,231,183,1)] shadow-[0_10px_20px_rgba(16,185,129,0.2)]"
-                >
-                  <LogOut size={14} />
-                </button>
-              ) : (
-                <button
-                  onClick={() => {
-                    void signInWithGoogle();
-                  }}
-                  disabled={isSigningInWithGoogle}
-                  title="Sign In"
-                  className="flex h-9 min-w-[94px] items-center justify-center gap-1 rounded-full border border-[color:rgba(96,165,250,0.55)] bg-[linear-gradient(130deg,#38bdf8,#3b82f6)] px-3 text-xs font-semibold text-[#05101f] shadow-[0_10px_24px_rgba(59,130,246,0.3)] disabled:opacity-60"
-                >
-                  <LogIn size={14} />
-                  <span>{isSigningInWithGoogle ? 'Wait...' : 'Sign In'}</span>
-                </button>
-              )}
+              <button
+                type="button"
+                onClick={() => setShowCurrencyModal(true)}
+                className="rounded-md border border-[var(--border)] bg-[var(--surface)] px-2 py-1 text-sm sm:hidden"
+              >
+                {currency}
+              </button>
+              <select
+                value={currency}
+                onChange={(event) => setCurrency(event.target.value as CurrencyCode)}
+                className="hidden rounded-md border border-[var(--border)] bg-[var(--surface)] px-2 py-1 text-sm sm:block"
+              >
+                {MAJOR_CURRENCIES.map((currencyOption) => (
+                  <option key={currencyOption.code} value={currencyOption.code}>
+                    {currencyOption.code}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                onClick={() => setTab('profile')}
+                className="relative flex h-9 w-9 items-center justify-center rounded-full border border-[var(--border)] bg-[var(--surface)]"
+                aria-label="Open profile"
+              >
+                <Settings size={14} />
+                {!accountUser ? <span className="absolute right-0.5 top-0.5 h-2 w-2 rounded-full bg-[var(--negative)]" /> : null}
+              </button>
             </div>
           </div>
 
@@ -1437,9 +1975,9 @@ export default function App() {
             <div className="flex items-start gap-2">
               <Info size={14} className="mt-0.5 text-[var(--accent)]" />
               <p className="text-[var(--text)]">
-                {activeContextTip === 'overview' ? 'This is your command center. Start with today, then scan quick stats and recent trades.' : null}
-                {activeContextTip === 'trades' ? 'All your trades are here. Tap any card to expand full details.' : null}
-                {activeContextTip === 'analytics' ? 'Great progress. Analytics now shows deeper insight into your trading behavior.' : null}
+                {activeContextTip === 'dashboard' ? 'Dashboard shows today, key metrics, and your most recent trades.' : null}
+                {activeContextTip === 'trades' ? 'Use search, filters, and date range together to isolate specific trades quickly.' : null}
+                {activeContextTip === 'insights' ? 'Insights explains what the charts are saying and what to improve next.' : null}
               </p>
             </div>
             <button
@@ -1476,16 +2014,72 @@ export default function App() {
             ))}
           </div>
 
-          {tab === 'overview' && (
+          {tab === 'dashboard' && (
             <div className="space-y-3">
               {portfolioValue === 0 && hasSkippedPortfolioValue && !dismissedPortfolioBanner ? (
                 <PortfolioValueBanner
-                  onSetValue={() => {
-                    setTab('settings');
-                  }}
+                  onSetValue={() => setTab('profile')}
                   onDismiss={() => setDismissedPortfolioBanner(true)}
                 />
               ) : null}
+
+              <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2">
+                <span className="text-sm text-[var(--muted)]">Portfolio Value</span>
+                {!isEditingPortfolio ? (
+                  <div className="flex items-center gap-2">
+                    <span className="font-semibold">{compactPortfolioValue}</span>
+                    <button
+                      type="button"
+                      onClick={() => setIsEditingPortfolio(true)}
+                      className="text-sm text-[var(--accent)] hover:underline"
+                    >
+                      Edit
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex w-full flex-wrap items-center justify-end gap-2 sm:w-auto">
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={portfolioValueInput}
+                      onChange={(event) => setPortfolioValueInput(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') {
+                          commitPortfolioValue();
+                          setIsEditingPortfolio(false);
+                        }
+                        if (event.key === 'Escape') {
+                          setPortfolioValueInput(portfolioValue.toFixed(2));
+                          setIsEditingPortfolio(false);
+                        }
+                      }}
+                      autoFocus
+                      className="h-11 w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-2 py-1 text-sm sm:w-36"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        commitPortfolioValue();
+                        setIsEditingPortfolio(false);
+                      }}
+                      className="text-sm text-[var(--positive)]"
+                    >
+                      Save
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPortfolioValueInput(portfolioValue.toFixed(2));
+                        setIsEditingPortfolio(false);
+                      }}
+                      className="text-sm text-[var(--muted)]"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                )}
+              </div>
 
               <div className="grid gap-3 lg:grid-cols-[1.25fr_1fr]">
                 <TodayPerformanceCard
@@ -1544,7 +2138,7 @@ export default function App() {
                     setEditTrade(null);
                     setShowForm(true);
                   }}
-                  className="min-h-11 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-sm font-medium"
+                  className="min-h-11 rounded-lg bg-[var(--accent)] px-3 py-2 text-sm font-semibold text-black"
                 >
                   Add Trade
                 </button>
@@ -1564,10 +2158,10 @@ export default function App() {
               ) : (
                 <EmptyState
                   icon={<CandlestickChart size={64} className="empty-icon-float" />}
-                  title="Start Your Trading Journey"
-                  description="Track every trade, analyze your performance, and improve your trading decisions over time."
+                  title="No trades yet"
+                  description="Add your first trade to start tracking performance."
                   action={{
-                    label: 'Add Your First Trade',
+                    label: 'Add Trade',
                     onClick: () => {
                       setEditTrade(null);
                       setShowForm(true);
@@ -1603,62 +2197,117 @@ export default function App() {
                     </div>
                   ))}
                 </div>
-              ) : (
-                <EmptyState
-                  icon={<AlarmClockCheck size={52} />}
-                  title="No Active Reminders"
-                  description="Set reminders to review trades or check on open positions."
-                  action={{
-                    label: 'Create Reminder',
-                    onClick: () => {
-                      pushToast('info', 'Weekly and month-end reminders are created automatically.');
-                    },
-                  }}
-                />
-              )}
+              ) : null}
             </div>
           )}
 
-                    {tab === 'trades' && (
-            <div className="space-y-2.5">
-              <div className="grid gap-2 md:grid-cols-4">
-                <label className="relative block">
-                  <Search size={14} className="pointer-events-none absolute left-2.5 top-2.5 text-[var(--muted)]" />
-                  <input
-                    value={search}
-                    onChange={(event) => setSearch(event.target.value)}
-                    placeholder="Search symbol"
-                    className="h-11 w-full rounded-lg border border-[var(--border)] bg-[var(--surface-3)] pl-8 pr-2.5 text-sm"
-                  />
-                </label>
+          {tab === 'trades' && (
+            <div className="space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h2 className="text-lg font-semibold">Trades ({filteredTrades.length})</h2>
+                <div className="inline-flex rounded-lg border border-[var(--border)] bg-[var(--surface)] p-0.5">
+                  <button
+                    type="button"
+                    onClick={() => setTradeViewMode('card')}
+                    className={`flex min-h-11 items-center gap-1 rounded-md px-3 text-xs ${
+                      tradeViewMode === 'card' ? 'bg-[var(--surface-3)] text-[var(--text)]' : 'text-[var(--muted)]'
+                    }`}
+                  >
+                    <LayoutGrid size={12} /> Card
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setTradeViewMode('compact')}
+                    className={`flex min-h-11 items-center gap-1 rounded-md px-3 text-xs ${
+                      tradeViewMode === 'compact' ? 'bg-[var(--surface-3)] text-[var(--text)]' : 'text-[var(--muted)]'
+                    }`}
+                  >
+                    <List size={12} /> Compact
+                  </button>
+                </div>
+              </div>
+
+              <label className="relative block">
+                <Search size={14} className="pointer-events-none absolute left-2.5 top-2.5 text-[var(--muted)]" />
+                <input
+                  value={search}
+                  onChange={(event) => setSearch(event.target.value)}
+                  placeholder="Search symbol"
+                  className="h-11 w-full rounded-lg border border-[var(--border)] bg-[var(--surface-3)] pl-8 pr-2.5 text-sm"
+                />
+              </label>
+
+              <div className="flex gap-2 overflow-x-auto pb-1">
+                <button
+                  type="button"
+                  onClick={() => setFlt('all')}
+                  className={`whitespace-nowrap rounded-full px-3 py-1 text-sm ${flt === 'all' ? 'bg-[var(--accent)] text-black' : 'bg-[var(--surface)] text-[var(--muted)]'}`}
+                >
+                  All ({trades.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setFlt('wins')}
+                  className={`whitespace-nowrap rounded-full px-3 py-1 text-sm ${flt === 'wins' ? 'bg-[var(--positive)] text-white' : 'bg-[var(--surface)] text-[var(--muted)]'}`}
+                >
+                  Wins ({winCount})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setFlt('losses')}
+                  className={`whitespace-nowrap rounded-full px-3 py-1 text-sm ${flt === 'losses' ? 'bg-[var(--negative)] text-white' : 'bg-[var(--surface)] text-[var(--muted)]'}`}
+                >
+                  Losses ({lossCount})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setFlt('open')}
+                  className={`whitespace-nowrap rounded-full px-3 py-1 text-sm ${flt === 'open' ? 'bg-[color:rgba(245,158,11,0.95)] text-black' : 'bg-[var(--surface)] text-[var(--muted)]'}`}
+                >
+                  Open ({activeTrades.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setFlt('closed')}
+                  className={`whitespace-nowrap rounded-full px-3 py-1 text-sm ${flt === 'closed' ? 'bg-[var(--surface-strong)] text-[var(--text)]' : 'bg-[var(--surface)] text-[var(--muted)]'}`}
+                >
+                  Closed ({closedTrades.length})
+                </button>
+              </div>
+
+              <div className="flex flex-wrap gap-2">
                 <input
                   type="date"
                   value={from}
                   onChange={(event) => setFrom(event.target.value)}
-                  className="h-11 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-2.5 text-sm"
+                  className="h-11 flex-1 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-2.5 text-sm"
+                  placeholder="From"
                 />
                 <input
                   type="date"
                   value={to}
                   onChange={(event) => setTo(event.target.value)}
-                  className="h-11 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-2.5 text-sm"
+                  className="h-11 flex-1 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-2.5 text-sm"
+                  placeholder="To"
                 />
-                <select
-                  value={flt}
-                  onChange={(event) => setFlt(event.target.value as FilterType)}
-                  className="h-11 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-2.5 text-sm"
-                >
-                  <option value="all">All P&amp;L</option>
-                  <option value="wins">Winners</option>
-                  <option value="losses">Losers</option>
-                </select>
+                {from || to ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFrom('');
+                      setTo('');
+                    }}
+                    className="min-h-11 rounded-lg border border-[var(--border)] px-3 text-sm text-[var(--muted)]"
+                  >
+                    Clear
+                  </button>
+                ) : null}
               </div>
 
               <div className="grid gap-2 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-2.5 md:grid-cols-[minmax(0,1fr)_220px_auto] md:items-center">
                 <p className="text-sm text-[var(--muted)]">
                   <Wallet size={12} className="mr-1 inline" />
-                  Showing {activeTrades.length} active trades - PF Value{' '}
-                  <span className="font-semibold text-[var(--text)]">{formatCurrency(portfolioValue)}</span>
+                  Showing {filteredOpenTrades.length} open of {filteredTrades.length} filtered trades
                 </p>
                 <div className="hidden rounded-md border border-[var(--border)] bg-[var(--surface)] px-2 py-1 md:block">
                   <p className="text-[10px] uppercase tracking-[0.06em] text-[var(--muted)]">P&amp;L Trend</p>
@@ -1680,25 +2329,8 @@ export default function App() {
                   </div>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
-                  <div className="inline-flex rounded-lg border border-[var(--border)] bg-[var(--surface)] p-0.5">
-                    <button
-                      onClick={() => setTradeViewMode('card')}
-                      className={`flex h-11 items-center gap-1 rounded-md px-2 text-xs ${
-                        tradeViewMode === 'card' ? 'bg-[var(--surface-3)] text-[var(--text)]' : 'text-[var(--muted)]'
-                      }`}
-                    >
-                      <LayoutGrid size={12} /> Card
-                    </button>
-                    <button
-                      onClick={() => setTradeViewMode('compact')}
-                      className={`flex h-11 items-center gap-1 rounded-md px-2 text-xs ${
-                        tradeViewMode === 'compact' ? 'bg-[var(--surface-3)] text-[var(--text)]' : 'text-[var(--muted)]'
-                      }`}
-                    >
-                      <List size={12} /> Compact
-                    </button>
-                  </div>
                   <button
+                    type="button"
                     onClick={() => {
                       void refreshOpenTradeMarks();
                     }}
@@ -1709,7 +2341,8 @@ export default function App() {
                     {isRefreshingMarks ? 'Refreshing' : 'Refresh'}
                   </button>
                   <button
-                    onClick={() => handleExportTrades(trades)}
+                    type="button"
+                    onClick={() => handleExportTrades(filteredTrades)}
                     className="min-h-11 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2.5 py-1.5 text-xs"
                   >
                     <Download size={13} className="mr-1 inline" /> Export
@@ -1727,7 +2360,7 @@ export default function App() {
 
               {markRefreshError ? (
                 <div className="rounded-lg border border-[color:rgba(248,113,113,0.5)] bg-[color:rgba(127,29,29,0.25)] p-3 text-sm">
-                  <p className="font-semibold text-[color:#fecaca]">Couldn't Refresh Prices</p>
+                  <p className="font-semibold text-[color:#fecaca]">Could not refresh prices</p>
                   <p className="mt-1 text-[color:#fecaca]">{markRefreshError}</p>
                   <div className="mt-2 flex gap-2">
                     <button
@@ -1753,52 +2386,38 @@ export default function App() {
               {trades.length === 0 ? (
                 <EmptyState
                   icon={<CandlestickChart size={64} className="empty-icon-float" />}
-                  title="Start Your Trading Journey"
-                  description="Track every trade, analyze your performance, and improve your trading decisions over time."
+                  title="No trades yet"
+                  description="Add your first trade to begin journaling."
                   action={{
-                    label: 'Add Your First Trade',
+                    label: 'Add Trade',
                     onClick: () => {
                       setEditTrade(null);
                       setShowForm(true);
                     },
                   }}
                 />
-              ) : activeTrades.length === 0 ? (
-                hasTradeFilters ? (
-                  <EmptyState
-                    icon={<Search size={58} />}
-                    title={`No trades found${search ? ` for "${search}"` : ''}`}
-                    description="Try searching by symbol, use partial matches, or clear filters to see more trades."
-                    action={{
-                      label: 'Clear Search',
-                      onClick: () => {
-                        setSearch('');
-                        setFrom('');
-                        setTo('');
-                        setFlt('all');
-                      },
-                    }}
-                  />
-                ) : (
-                  <EmptyState
-                    icon={<Inbox size={54} />}
-                    title="No Open Trades Right Now"
-                    description="Your open positions will appear here. You can add a new trade to continue tracking."
-                    action={{
-                      label: 'Add Trade',
-                      onClick: () => {
-                        setEditTrade(null);
-                        setShowForm(true);
-                      },
-                    }}
-                  />
-                )
+              ) : filteredTrades.length === 0 ? (
+                <EmptyState
+                  icon={<Search size={58} />}
+                  title={`No trades found${search ? ` for "${search}"` : ''}`}
+                  description="Try adjusting filters or clearing search."
+                  action={{
+                    label: 'Clear Filters',
+                    onClick: () => {
+                      setSearch('');
+                      setFrom('');
+                      setTo('');
+                      setFlt('all');
+                    },
+                  }}
+                />
               ) : tradeViewMode === 'compact' ? (
                 <div className="overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--surface-2)] shadow-[var(--shadow-card)]">
                   <div className="overflow-x-auto">
-                    <div className="min-w-[760px]">
-                      <div className="grid grid-cols-[90px_64px_90px_70px_120px_76px_124px] gap-2 border-b border-[var(--border)] px-2 py-2">
+                    <div className="min-w-[860px]">
+                      <div className="grid grid-cols-[92px_72px_62px_92px_70px_120px_74px_132px] gap-2 border-b border-[var(--border)] px-2 py-2">
                         <p className="ui-label">Symbol</p>
+                        <p className="ui-label">Status</p>
                         <p className="ui-label">Side</p>
                         <p className="ui-label">Entry</p>
                         <p className="ui-label">Qty</p>
@@ -1806,10 +2425,10 @@ export default function App() {
                         <p className="ui-label">%</p>
                         <p className="ui-label text-right">Actions</p>
                       </div>
-                      {activeTrades.map((trade) => (
+                      {filteredTrades.map((trade) => (
                         <div
                           key={trade.id}
-                          className={`grid grid-cols-[90px_64px_90px_70px_120px_76px_124px] items-center gap-2 border-b border-[var(--border)] px-2 py-1.5 last:border-b-0 ${
+                          className={`grid grid-cols-[92px_72px_62px_92px_70px_120px_74px_132px] items-center gap-2 border-b border-[var(--border)] px-2 py-1.5 last:border-b-0 ${
                             trade.totalPnl >= 0 ? 'border-l-2 border-l-[var(--positive)]' : 'border-l-2 border-l-[var(--negative)]'
                           }`}
                         >
@@ -1817,19 +2436,22 @@ export default function App() {
                             <p className="truncate text-sm font-semibold">{trade.symbol}</p>
                             <p className="truncate text-[10px] text-[var(--muted)]">{formatTradeDate(trade.date)}</p>
                           </div>
+                          <p className="text-xs uppercase text-[var(--muted)]">{trade.status}</p>
                           <p className="text-xs uppercase text-[var(--muted)]">{trade.direction === 'long' ? 'LONG' : 'SHORT'}</p>
                           <p className="text-xs ui-number">{formatCurrency(trade.entryPrice)}</p>
                           <p className="text-xs ui-number">{trade.quantity.toFixed(2)}</p>
                           <p className={`text-xs font-semibold ui-number ${pnlClass(trade.totalPnl)}`}>{pnl(trade.totalPnl)}</p>
                           <p className={`text-xs ui-number ${pnlClass(trade.totalPnl)}`}>{trade.totalPnlPercent.toFixed(2)}%</p>
                           <div className="flex justify-end gap-1">
-                            <button
-                              type="button"
-                              onClick={() => setManageTrade(trade)}
-                              className="h-11 rounded-full bg-[color:rgba(245,158,11,0.18)] px-2.5 text-[10px] font-medium text-[color:#fbbf24] transition hover:brightness-110"
-                            >
-                              Manage
-                            </button>
+                            {trade.status === 'open' ? (
+                              <button
+                                type="button"
+                                onClick={() => setManageTrade(trade)}
+                                className="h-11 rounded-full bg-[color:rgba(245,158,11,0.18)] px-2.5 text-[10px] font-medium text-[color:#fbbf24] transition hover:brightness-110"
+                              >
+                                Manage
+                              </button>
+                            ) : null}
                             <button
                               type="button"
                               onClick={() => {
@@ -1855,7 +2477,7 @@ export default function App() {
                 </div>
               ) : (
                 <div className="grid gap-2">
-                  {activeTrades.map((trade) => (
+                  {filteredTrades.map((trade) => (
                     <TradeCard
                       key={trade.id}
                       trade={trade}
@@ -1865,7 +2487,7 @@ export default function App() {
                       formatTradeDate={formatTradeDate}
                       onToggle={(tradeId) => setExpandedTradeId((prev) => (prev === tradeId ? null : tradeId))}
                       onEdit={(tradeId) => {
-                        const selected = activeTrades.find((item) => item.id === tradeId);
+                        const selected = filteredTrades.find((item) => item.id === tradeId);
                         if (!selected) {
                           return;
                         }
@@ -1873,13 +2495,15 @@ export default function App() {
                         setShowForm(true);
                       }}
                       onDelete={(tradeId) => delTrade(tradeId)}
-                      onManage={(tradeId) => {
-                        const selected = activeTrades.find((item) => item.id === tradeId);
-                        if (!selected) {
-                          return;
+                      onManage={trade.status === 'open'
+                        ? (tradeId) => {
+                          const selected = filteredTrades.find((item) => item.id === tradeId && item.status === 'open');
+                          if (!selected) {
+                            return;
+                          }
+                          setManageTrade(selected);
                         }
-                        setManageTrade(selected);
-                      }}
+                        : undefined}
                     />
                   ))}
                 </div>
@@ -1887,161 +2511,21 @@ export default function App() {
             </div>
           )}
 
-                    {tab === 'history' && (
-            <div className="space-y-2.5">
-              <div className="grid gap-2 md:grid-cols-4">
-                <label className="relative block">
-                  <Search size={14} className="pointer-events-none absolute left-2.5 top-2.5 text-[var(--muted)]" />
-                  <input
-                    value={search}
-                    onChange={(event) => setSearch(event.target.value)}
-                    placeholder="Search symbol"
-                    className="h-11 w-full rounded-lg border border-[var(--border)] bg-[var(--surface-3)] pl-8 pr-2.5 text-sm"
-                  />
-                </label>
-                <input
-                  type="date"
-                  value={from}
-                  onChange={(event) => setFrom(event.target.value)}
-                  className="h-11 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-2.5 text-sm"
-                />
-                <input
-                  type="date"
-                  value={to}
-                  onChange={(event) => setTo(event.target.value)}
-                  className="h-11 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-2.5 text-sm"
-                />
-                <select
-                  value={flt}
-                  onChange={(event) => setFlt(event.target.value as FilterType)}
-                  className="h-11 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-2.5 text-sm"
-                >
-                  <option value="all">All P&amp;L</option>
-                  <option value="wins">Winners</option>
-                  <option value="losses">Losers</option>
-                </select>
-              </div>
-
-              <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-2.5">
-                <p className="text-sm text-[var(--muted)]">
-                  Showing {historyTrades.length} closed trades (fully executed)
-                </p>
-                <button
-                  onClick={() => handleExportTrades(historyTrades)}
-                  className="min-h-11 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2.5 py-1.5 text-xs"
-                >
-                  <Download size={13} className="mr-1 inline" /> Export History
-                </button>
-              </div>
-
-              {historyTrades.length === 0 ? (
-                hasTradeFilters ? (
-                  <EmptyState
-                    icon={<Search size={58} />}
-                    title={`No trades found${search ? ` for "${search}"` : ''}`}
-                    description="Try searching for a different symbol or clear filters to view your closed trades."
-                    action={{
-                      label: 'Clear Search',
-                      onClick: () => {
-                        setSearch('');
-                        setFrom('');
-                        setTo('');
-                        setFlt('all');
-                      },
-                    }}
-                  />
-                ) : (
-                  <EmptyState
-                    icon={<Clock3 size={58} />}
-                    title="No Closed Trades Yet"
-                    description="Your trade history will appear here once you close your positions."
-                    action={{
-                      label: 'View Open Trades',
-                      onClick: () => setTab('trades'),
-                    }}
-                    secondary={<p className="text-xs text-[var(--muted)]">Active trades: {activeTrades.length} open</p>}
-                  />
-                )
-              ) : tradeViewMode === 'compact' ? (
-                <div className="overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--surface-2)] shadow-[var(--shadow-card)]">
-                  <div className="overflow-x-auto">
-                    <div className="min-w-[730px]">
-                      <div className="grid grid-cols-[90px_64px_90px_72px_118px_76px_114px] gap-2 border-b border-[var(--border)] px-2 py-2">
-                        <p className="ui-label">Symbol</p>
-                        <p className="ui-label">Side</p>
-                        <p className="ui-label">Entry</p>
-                        <p className="ui-label">Qty</p>
-                        <p className="ui-label">Realized</p>
-                        <p className="ui-label">%</p>
-                        <p className="ui-label text-right">Actions</p>
-                      </div>
-                      {historyTrades.map((trade) => (
-                        <div
-                          key={trade.id}
-                          className={`grid grid-cols-[90px_64px_90px_72px_118px_76px_114px] items-center gap-2 border-b border-[var(--border)] px-2 py-1.5 last:border-b-0 ${
-                            trade.realizedPnl >= 0 ? 'border-l-2 border-l-[var(--positive)]' : 'border-l-2 border-l-[var(--negative)]'
-                          }`}
-                        >
-                          <div className="min-w-0">
-                            <p className="truncate text-sm font-semibold">{trade.symbol}</p>
-                            <p className="truncate text-[10px] text-[var(--muted)]">{formatTradeDate(trade.date)}</p>
-                          </div>
-                          <p className="text-xs uppercase text-[var(--muted)]">{trade.direction === 'long' ? 'LONG' : 'SHORT'}</p>
-                          <p className="ui-number text-xs">{formatCurrency(trade.entryPrice)}</p>
-                          <p className="ui-number text-xs">{trade.quantity.toFixed(2)}</p>
-                          <p className={`ui-number text-xs font-semibold ${pnlClass(trade.realizedPnl)}`}>{pnl(trade.realizedPnl)}</p>
-                          <p className={`ui-number text-xs ${pnlClass(trade.totalPnl)}`}>{trade.totalPnlPercent.toFixed(2)}%</p>
-                          <div className="flex justify-end gap-1">
-                            <button
-                              onClick={() => {
-                                setEditTrade(trade);
-                                setShowForm(true);
-                              }}
-                              className="h-11 w-11 rounded-md border border-[var(--border)] text-[var(--muted)] transition hover:text-[var(--text)]"
-                            >
-                              <Edit2 size={12} className="mx-auto" />
-                            </button>
-                            <button
-                              onClick={() => delTrade(trade.id)}
-                              className="h-11 w-11 rounded-md border border-[var(--border)] text-[var(--muted)] transition hover:text-[var(--negative)]"
-                            >
-                              <Trash2 size={12} className="mx-auto" />
-                            </button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              ) : (
-                <div className="grid gap-2">
-                  {historyTrades.map((trade) => (
-                    <TradeCard
-                      key={trade.id}
-                      trade={trade}
-                      isExpanded={expandedTradeId === trade.id}
-                      portfolioValue={portfolioValue}
-                      formatCurrency={formatCurrency}
-                      formatTradeDate={formatTradeDate}
-                      onToggle={(tradeId) => setExpandedTradeId((prev) => (prev === tradeId ? null : tradeId))}
-                      onEdit={(tradeId) => {
-                        const selected = historyTrades.find((item) => item.id === tradeId);
-                        if (!selected) {
-                          return;
-                        }
-                        setEditTrade(selected);
-                        setShowForm(true);
-                      }}
-                      onDelete={(tradeId) => delTrade(tradeId)}
-                    />
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-
-                    {tab === 'analytics' && (
+          {tab === 'insights' && (
             <div className="space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h2 className="text-lg font-semibold">Insights</h2>
+                <label className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={useUnrealized}
+                    onChange={(event) => setUseUnrealized(event.target.checked)}
+                    className="h-4 w-4 rounded"
+                  />
+                  <span className="text-[var(--muted)]">Include Unrealized</span>
+                </label>
+              </div>
+
               <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                 <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-3">
                   <p className="text-xs uppercase text-[var(--muted)]">Realized P&amp;L</p>
@@ -2059,104 +2543,160 @@ export default function App() {
                 <EmptyState
                   icon={<BarChart3 size={64} className="empty-icon-float" />}
                   title="Build Your Analytics Profile"
-                  description="You need at least 5 trades to see meaningful analytics and insights."
+                  description={`Add at least 5 trades for meaningful insights. Current: ${trades.length}/5`}
                   action={{
                     label: 'Add More Trades',
                     onClick: () => setTab('trades'),
                   }}
-                  secondary={(
-                    <div className="w-full min-w-[220px]">
-                      <p className="mb-1 text-xs text-[var(--muted)]">Current progress: {Math.min(trades.length, 5)}/5 trades</p>
-                      <div className="h-2 rounded-full bg-[var(--surface)]">
-                        <div
-                          className="h-full rounded-full bg-[var(--accent)]"
-                          style={{ width: `${Math.min((trades.length / 5) * 100, 100)}%` }}
-                        />
-                      </div>
-                    </div>
-                  )}
                 />
               ) : (
                 <>
-                  {portfolioValue === 0 ? (
-                    <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-4 text-center">
-                      <p className="mb-2 text-sm font-semibold">Limited Analytics</p>
-                      <p className="mb-3 text-sm text-[var(--muted)]">
-                        Set your portfolio value to see % based analytics and risk metrics.
-                      </p>
-                      <button
-                        type="button"
-                        onClick={() => setTab('settings')}
-                        className="min-h-11 rounded-lg bg-[var(--accent)] px-4 py-2 text-sm font-semibold text-black"
-                      >
-                        Set Portfolio Value
-                      </button>
-                    </div>
+                  {pnlInsight ? (
+                    <InsightCard
+                      {...pnlInsight}
+                      dismissible
+                      dismissed={dismissedInsightSet.has(pnlInsight.id)}
+                      onDismiss={dismissInsight}
+                    />
+                  ) : null}
+                  <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-3">
+                    <p className="mb-2 text-xs uppercase text-[var(--muted)]">P&amp;L Over Time</p>
+                    <ResponsiveContainer width="100%" height={240}>
+                      <LineChart data={lineData}>
+                        <CartesianGrid stroke={C.grid} strokeDasharray="3 3" />
+                        <XAxis dataKey="date" stroke={C.text} />
+                        <YAxis stroke={C.text} />
+                        <Tooltip
+                          contentStyle={CHART_TOOLTIP_STYLE}
+                          labelStyle={CHART_LABEL_STYLE}
+                          itemStyle={CHART_ITEM_STYLE}
+                        />
+                        <Line dataKey="realized" stroke={C.realized} strokeWidth={2} dot={false} />
+                        <Line dataKey="provisional" stroke={C.provisional} strokeWidth={2} dot={false} />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </div>
+
+                  {winRateInsight ? (
+                    <InsightCard
+                      {...winRateInsight}
+                      dismissible
+                      dismissed={dismissedInsightSet.has(winRateInsight.id)}
+                      onDismiss={dismissInsight}
+                    />
+                  ) : null}
+                  <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-3">
+                    <p className="mb-2 text-xs uppercase text-[var(--muted)]">Win/Loss (closed trades)</p>
+                    {summary.wins + summary.losses > 0 ? (
+                      <ResponsiveContainer width="100%" height={240}>
+                        <PieChart>
+                          <Pie data={pieData} dataKey="value" cx="50%" cy="50%" outerRadius={75}>
+                            {pieData.map((entry, index) => (
+                              <Cell key={index} fill={entry.color} />
+                            ))}
+                          </Pie>
+                          <Tooltip
+                            contentStyle={CHART_TOOLTIP_STYLE}
+                            labelStyle={CHART_LABEL_STYLE}
+                            itemStyle={CHART_ITEM_STYLE}
+                          />
+                        </PieChart>
+                      </ResponsiveContainer>
+                    ) : (
+                      <div className="flex h-[240px] items-center justify-center text-center text-sm text-[var(--muted)]">
+                        <div>
+                          <Inbox size={18} className="mx-auto mb-1" />
+                          Close trades to populate win/loss split.
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {tradingFrequencyInsight ? (
+                    <InsightCard
+                      {...tradingFrequencyInsight}
+                      dismissible
+                      dismissed={dismissedInsightSet.has(tradingFrequencyInsight.id)}
+                      onDismiss={dismissInsight}
+                    />
+                  ) : null}
+                  <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-3">
+                    <p className="mb-2 text-xs uppercase text-[var(--muted)]">Trading Activity (14 days)</p>
+                    <ResponsiveContainer width="100%" height={220}>
+                      <BarChart data={activityData}>
+                        <CartesianGrid stroke={C.grid} strokeDasharray="3 3" />
+                        <XAxis dataKey="day" stroke={C.text} />
+                        <YAxis stroke={C.text} />
+                        <Tooltip
+                          contentStyle={CHART_TOOLTIP_STYLE}
+                          labelStyle={CHART_LABEL_STYLE}
+                          itemStyle={CHART_ITEM_STYLE}
+                        />
+                        <Bar dataKey="trades" fill={C.realized} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+
+                  {riskInsight ? (
+                    <InsightCard
+                      {...riskInsight}
+                      dismissible
+                      dismissed={dismissedInsightSet.has(riskInsight.id)}
+                      onDismiss={dismissInsight}
+                    />
+                  ) : null}
+                  <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-3">
+                    <p className="mb-2 text-xs uppercase text-[var(--muted)]">Risk Exposure (%)</p>
+                    <ResponsiveContainer width="100%" height={220}>
+                      <BarChart data={riskExposureData}>
+                        <CartesianGrid stroke={C.grid} strokeDasharray="3 3" />
+                        <XAxis dataKey="name" stroke={C.text} />
+                        <YAxis stroke={C.text} domain={[0, 100]} />
+                        <Tooltip
+                          contentStyle={CHART_TOOLTIP_STYLE}
+                          labelStyle={CHART_LABEL_STYLE}
+                          itemStyle={CHART_ITEM_STYLE}
+                        />
+                        <Bar dataKey="percent">
+                          {riskExposureData.map((entry, index) => (
+                            <Cell key={index} fill={entry.fill} />
+                          ))}
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+
+                  {streakInsight ? (
+                    <InsightCard
+                      {...streakInsight}
+                      dismissible
+                      dismissed={dismissedInsightSet.has(streakInsight.id)}
+                      onDismiss={dismissInsight}
+                    />
+                  ) : null}
+                  {bestWorstInsight ? (
+                    <InsightCard
+                      {...bestWorstInsight}
+                      dismissible
+                      dismissed={dismissedInsightSet.has(bestWorstInsight.id)}
+                      onDismiss={dismissInsight}
+                    />
                   ) : null}
 
-                  <div className="flex items-center justify-between rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-3">
-                    <p className="text-sm">Analytics mode: {useUnrealized ? 'Realized + unrealized' : 'Realized only'}</p>
-                    <button
-                      onClick={() => setUseUnrealized((value) => !value)}
-                      className="min-h-11 rounded border border-[var(--border)] px-3 py-1 text-sm"
-                    >
-                      Toggle
-                    </button>
+                  <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-3">
+                    <h3 className="mb-2 font-semibold">Goals</h3>
+                    <GoalsPanel
+                      period={currentPeriod}
+                      goals={periodGoals}
+                      progress={goalProgress}
+                      formatCurrency={formatCurrency}
+                      onSaveGoal={(type: GoalType, target: number) =>
+                        setGoals(goalRepo.upsertGoal({ type, period: currentPeriod, target }))
+                      }
+                      onDeleteGoal={(id: string) => setGoals(goalRepo.deleteGoal(id))}
+                    />
                   </div>
-                  <div className="grid gap-3 lg:grid-cols-2">
-                    <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-3">
-                      <p className="mb-2 text-xs uppercase text-[var(--muted)]">Monthly Performance</p>
-                      {monthData.length > 0 ? (
-                        <ResponsiveContainer width="100%" height={240}>
-                          <BarChart data={monthData}>
-                            <CartesianGrid stroke={C.grid} strokeDasharray="3 3" />
-                            <XAxis dataKey="month" stroke={C.text} />
-                            <YAxis stroke={C.text} />
-                            <Tooltip
-                              contentStyle={CHART_TOOLTIP_STYLE}
-                              labelStyle={CHART_LABEL_STYLE}
-                              itemStyle={CHART_ITEM_STYLE}
-                            />
-                            <Bar dataKey="realized" fill={C.realized} />
-                            <Bar dataKey="provisional" fill={C.provisional} />
-                          </BarChart>
-                        </ResponsiveContainer>
-                      ) : (
-                        <div className="flex h-[240px] items-center justify-center text-center text-sm text-[var(--muted)]">
-                          <div>
-                            <Inbox size={18} className="mx-auto mb-1" />
-                            Add your first trade to unlock analytics.
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                    <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-3">
-                      <p className="mb-2 text-xs uppercase text-[var(--muted)]">Win/Loss (closed trades)</p>
-                      {summary.wins + summary.losses > 0 ? (
-                        <ResponsiveContainer width="100%" height={240}>
-                          <PieChart>
-                            <Pie data={pieData} dataKey="value" cx="50%" cy="50%" outerRadius={75}>
-                              {pieData.map((entry, index) => (
-                                <Cell key={index} fill={entry.color} />
-                              ))}
-                            </Pie>
-                            <Tooltip
-                              contentStyle={CHART_TOOLTIP_STYLE}
-                              labelStyle={CHART_LABEL_STYLE}
-                              itemStyle={CHART_ITEM_STYLE}
-                            />
-                          </PieChart>
-                        </ResponsiveContainer>
-                      ) : (
-                        <div className="flex h-[240px] items-center justify-center text-center text-sm text-[var(--muted)]">
-                          <div>
-                            <Inbox size={18} className="mx-auto mb-1" />
-                            Close trades to populate win/loss split.
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  </div>
+
                   <div className="grid gap-3 md:grid-cols-3">
                     <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-3">
                       <p className="text-xs text-[var(--muted)]">Best Setup (&gt;=3)</p>
@@ -2185,154 +2725,50 @@ export default function App() {
             </div>
           )}
 
-          {tab === 'goals' && (
-            <div className="space-y-3">
-              {goals.length === 0 ? (
-                <EmptyState
-                  icon={<Target size={60} className="empty-icon-float" />}
-                  title="Set Your Trading Goals"
-                  description="Stay motivated and track progress toward your trading objectives."
-                  action={{
-                    label: 'Create Your First Goal',
-                    onClick: () => {
-                      pushToast('info', 'Use the goal editor below to create your first goal.');
-                    },
-                  }}
-                  secondary={(
-                    <div className="rounded-lg border border-[var(--border)] bg-[var(--surface)] p-3 text-left text-xs text-[var(--muted)]">
-                      <p className="mb-1 font-semibold text-[var(--text)]">Popular goals:</p>
-                      <p>• Hit ₹10,000 monthly profit</p>
-                      <p>• Achieve 70% win rate</p>
-                      <p>• Make 20 profitable trades</p>
-                    </div>
-                  )}
-                />
-              ) : null}
-              <GoalsPanel
-                period={currentPeriod}
-                goals={periodGoals}
-                progress={goalProgress}
-                formatCurrency={formatCurrency}
-                onSaveGoal={(type: GoalType, target: number) =>
-                  setGoals(goalRepo.upsertGoal({ type, period: currentPeriod, target }))
-                }
-                onDeleteGoal={(id: string) => setGoals(goalRepo.deleteGoal(id))}
-              />
-            </div>
-          )}
-
-          {tab === 'settings' && (
+          {tab === 'profile' && (
             <div className="space-y-4">
+              <h2 className="text-lg font-semibold">Profile</h2>
               <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-3">
-                <h3 className="mb-1 flex items-center gap-2 text-sm font-semibold">
-                  <Globe2 size={14} className="text-[var(--accent)]" />
-                  Trading Preferences
-                </h3>
-                <p className="mt-1 text-xs text-[var(--muted)]">
-                  Currency and PF value are saved locally and synced to your account when signed in.
-                </p>
-                <div className="mt-3 grid gap-2 border-t border-[var(--border)] pt-3 md:grid-cols-2">
-                  <label className="space-y-1 text-sm">
-                    <span className="ui-label">Display Currency</span>
-                    <select
-                      value={currency}
-                      onChange={(event) => setCurrency(event.target.value as CurrencyCode)}
-                      className="h-11 w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 text-sm"
-                    >
-                      {MAJOR_CURRENCIES.map((currencyOption) => (
-                        <option key={currencyOption.code} value={currencyOption.code}>
-                          {currencyOption.label}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-
-                  <label className="space-y-1 text-sm">
-                    <span className="ui-label">PF Value ({currency})</span>
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={portfolioValueInput}
-                      onChange={(event) => setPortfolioValueInput(event.target.value)}
-                      onBlur={commitPortfolioValue}
-                      onKeyDown={(event) => {
-                        if (event.key === 'Enter') {
-                          event.preventDefault();
-                          commitPortfolioValue();
-                        }
-                      }}
-                      className="h-11 w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 text-sm"
-                    />
-                  </label>
+                <h3 className="mb-2 font-semibold">Portfolio</h3>
+                <div className="space-y-2 text-sm">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[var(--muted)]">Base Currency</span>
+                    <span className="font-semibold">{currency}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-[var(--muted)]">Portfolio Value</span>
+                    <span className="font-semibold">{formatCurrency(portfolioValue)}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-[var(--muted)]">Total P&amp;L</span>
+                    <span className={`font-semibold ${pnlClass(summary.total)}`}>{pnl(summary.total)}</span>
+                  </div>
                 </div>
               </div>
 
               <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-3">
-                <h3 className="mb-1 flex items-center gap-2 text-sm font-semibold">
-                  <SlidersHorizontal size={14} className="text-[var(--accent)]" />
-                  Execution Controls
-                </h3>
-                <div className="mt-3 space-y-2 border-t border-[var(--border)] pt-3">
-                  <button
-                    type="button"
-                    onClick={() => setConfirmDelete((value) => !value)}
-                    className="flex min-h-11 w-full items-center justify-between rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 text-sm transition hover:brightness-110"
-                  >
-                    <span>Confirm before deleting trades</span>
-                    <span className={`relative h-6 w-11 rounded-full transition ${confirmDelete ? 'bg-[var(--positive)]' : 'bg-[var(--surface-3)]'}`}>
-                      <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white transition ${confirmDelete ? 'left-[22px]' : 'left-0.5'}`} />
-                    </span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setAutoRefreshMarks((value) => !value)}
-                    className="flex min-h-11 w-full items-center justify-between rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 text-sm transition hover:brightness-110"
-                  >
-                    <span>Auto-refresh open marks on app start</span>
-                    <span className={`relative h-6 w-11 rounded-full transition ${autoRefreshMarks ? 'bg-[var(--positive)]' : 'bg-[var(--surface-3)]'}`}>
-                      <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white transition ${autoRefreshMarks ? 'left-[22px]' : 'left-0.5'}`} />
-                    </span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setUseUnrealized((value) => !value)}
-                    className="flex min-h-11 w-full items-center justify-between rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 text-sm transition hover:brightness-110"
-                  >
-                    <span>Analytics include unrealized P&amp;L</span>
-                    <span className={`relative h-6 w-11 rounded-full transition ${useUnrealized ? 'bg-[var(--positive)]' : 'bg-[var(--surface-3)]'}`}>
-                      <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white transition ${useUnrealized ? 'left-[22px]' : 'left-0.5'}`} />
-                    </span>
-                  </button>
-                </div>
-              </div>
-
-              <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-3">
-                <h3 className="mb-1 flex items-center gap-2 text-sm font-semibold">
-                  <ShieldCheck size={14} className="text-[var(--accent)]" />
-                  Account Sync
-                </h3>
-                <p className="mt-1 text-xs text-[var(--muted)]">
-                  Sign in with Google to keep settings across devices. Sync runs automatically after each change.
-                </p>
-
+                <h3 className="mb-2 font-semibold">Account</h3>
                 {accountUser ? (
-                  <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-2.5">
-                    <p className="text-sm">
+                  <div>
+                    <p className="mb-2 text-sm">
                       Signed in as <span className="font-semibold">{accountUser.email ?? accountUser.id}</span>
                     </p>
+                    <p className="mb-2 text-xs text-[var(--positive)]">Settings synced across devices</p>
                     <button
+                      type="button"
                       onClick={() => {
                         void signOut();
                       }}
-                      className="min-h-11 rounded-lg border border-[var(--border)] px-3 py-2 text-sm"
+                      className="min-h-11 w-full rounded-lg border border-[var(--border)] px-3 py-2 text-sm"
                     >
                       <LogOut size={14} className="mr-1 inline" /> Sign Out
                     </button>
                   </div>
                 ) : (
-                  <div className="mt-3 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-2.5">
+                  <div>
+                    <p className="mb-2 text-sm text-[var(--muted)]">Sign in to sync your settings and data across devices.</p>
                     <button
+                      type="button"
                       onClick={() => {
                         void signInWithGoogle();
                       }}
@@ -2343,11 +2779,54 @@ export default function App() {
                     </button>
                   </div>
                 )}
+                <p className="mt-2 text-xs text-[var(--muted)]">{authNotice}</p>
+              </div>
 
-                <p className="mt-3 text-xs text-[var(--muted)]">{authNotice}</p>
-                {isSyncingSettings && isAuthReady && accountUser ? (
-                  <p className="mt-1 text-xs text-[var(--accent)]">Syncing settings to account...</p>
-                ) : null}
+              <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-3">
+                <h3 className="mb-2 font-semibold">Preferences</h3>
+                <button
+                  type="button"
+                  onClick={() => setConfirmDelete((value) => !value)}
+                  className="mb-2 flex min-h-11 w-full items-center justify-between rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 text-sm"
+                >
+                  <span>Confirm before deleting trades</span>
+                  <span className={`relative h-6 w-11 rounded-full transition ${confirmDelete ? 'bg-[var(--positive)]' : 'bg-[var(--surface-3)]'}`}>
+                    <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white transition ${confirmDelete ? 'left-[22px]' : 'left-0.5'}`} />
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAutoRefreshMarks((value) => !value)}
+                  className="flex min-h-11 w-full items-center justify-between rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 text-sm"
+                >
+                  <span>Auto-refresh prices on app start</span>
+                  <span className={`relative h-6 w-11 rounded-full transition ${autoRefreshMarks ? 'bg-[var(--positive)]' : 'bg-[var(--surface-3)]'}`}>
+                    <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white transition ${autoRefreshMarks ? 'left-[22px]' : 'left-0.5'}`} />
+                  </span>
+                </button>
+              </div>
+
+              <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-3">
+                <h3 className="mb-2 font-semibold">Data</h3>
+                <button
+                  type="button"
+                  onClick={() => handleExportTrades(trades)}
+                  className="mb-2 min-h-11 w-full rounded-lg border border-[var(--border)] px-3 py-2 text-sm"
+                >
+                  <Download size={14} className="mr-1 inline" /> Export CSV
+                </button>
+                <button
+                  type="button"
+                  onClick={handleClearAllData}
+                  className="min-h-11 w-full rounded-lg border border-[var(--negative)] bg-[color:rgba(248,113,113,0.12)] px-3 py-2 text-sm text-[var(--negative)]"
+                >
+                  Clear All Data
+                </button>
+              </div>
+
+              <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-3">
+                <h3 className="mb-2 font-semibold">About</h3>
+                <p className="text-sm text-[var(--muted)]">Trading Journal Pro v1.0.0</p>
               </div>
             </div>
           )}
@@ -2367,7 +2846,7 @@ export default function App() {
       </button>
 
       <nav className="fixed bottom-0 left-0 right-0 z-40 border-t border-[var(--border)] bg-[color:rgba(7,11,20,0.95)] px-2 py-2 backdrop-blur md:hidden">
-        <div className="grid grid-cols-6 gap-2">
+        <div className="grid grid-cols-4 gap-2">
           {tabs.map((tabItem) => (
             <button
               key={tabItem.id}
@@ -2389,6 +2868,42 @@ export default function App() {
           ))}
         </div>
       </nav>
+
+      {showCurrencyModal ? (
+        <div className="fixed inset-0 z-50 flex items-end bg-black/60 p-3 sm:hidden">
+          <div className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface)] p-3">
+            <div className="mb-2 flex items-center justify-between">
+              <p className="text-sm font-semibold">Select Currency</p>
+              <button
+                type="button"
+                onClick={() => setShowCurrencyModal(false)}
+                className="rounded-md p-1 text-[var(--muted)]"
+              >
+                <X size={14} />
+              </button>
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              {MAJOR_CURRENCIES.map((currencyOption) => (
+                <button
+                  key={currencyOption.code}
+                  type="button"
+                  onClick={() => {
+                    setCurrency(currencyOption.code);
+                    setShowCurrencyModal(false);
+                  }}
+                  className={`rounded-md border px-2 py-2 text-sm ${
+                    currency === currencyOption.code
+                      ? 'border-[var(--accent)] bg-[color:rgba(125,211,252,0.15)] text-[var(--text)]'
+                      : 'border-[var(--border)] bg-[var(--surface-2)] text-[var(--muted)]'
+                  }`}
+                >
+                  {currencyOption.code}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       <Toaster
         position={toastPosition}
@@ -2470,6 +2985,9 @@ export default function App() {
     </div>
   );
 }
+
+
+
 
 
 
